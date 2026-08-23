@@ -24,7 +24,7 @@ function doGet(e) {
       case "getReportById": response = getReportById(e.parameter.id); break;
       case "findProductByBarcode": response = findProductByBarcode(e.parameter.barcode, e.parameter.campaign); break;
       case "getCompetitorProducts": response = getCompetitorProductsFromSheet(); break;
-      case "getFestivalMovements": response = getFestivalMovements(e.parameter.reportId); break;
+      case "getUserFestivalMovements": response = getUserFestivalMovements(e.parameter.userId); break;
       default: response = {status:"error", message:"Invalid GET Action"};
     }
     return createJsonResponse(response);
@@ -64,8 +64,8 @@ function doPost(e) {
         response = addFestivalMovement(request.payload);
         break;
 
-      case "sendRemainingToSales":
-        response = sendRemainingToSales(request.payload);
+      case "closeOutUserTallyToSales":
+        response = closeOutUserTallyToSales(request.payload);
         break;
 
       default:
@@ -438,6 +438,7 @@ function handleReportSubmission(reportData) {
 
   addReportDetails(reportData);
   updateProductPrices(reportData);
+  syncReportExpensesToFestivalMovement(reportData);
   cache.removeAll(['allReports','allReports_v2','allReports_v3_user_history','initialData_' + INITIAL_DATA_CACHE_VERSION]);
   return {status:'success', reportId:reportId};
 }
@@ -759,88 +760,121 @@ if (!newMarket) {
 }
 
 // ===============================================================
-// سحب / مرتجع مواد المهرجان (festivalMovement)
-// متاحة فقط للتقارير التي نوع الحدث فيها "ترويج وبيع مباشر".
+// سحب / مرتجع مواد (festivalMovement) — مبنية على المستخدم (createdById)
+// أنواع العمليات في العمود operation:
+//   "سحب" / "مرتجع"  -> تُدخل يدوياً من صفحة سحب/مرتجع المواد.
+//   "صرف"            -> تُسجَّل تلقائياً من جدول المصاريف عند حفظ تقرير "ترويج وبيع مباشر".
+//   "مبيعات"         -> تُسجَّل فقط يدوياً عبر زر "إرسال صافي المحصلة إلى المبيعات"
+//                       (لم تعد تلقائية)، وتُصفّر محصلة المستخدم لحظة إرسالها.
 // ===============================================================
 
 const FESTIVAL_MOVEMENT_SHEET_NAME = "festivalMovement";
-const FESTIVAL_MOVEMENT_HEADERS = ["reportId","item","quantity","operation","date","createdById","createdByName"];
+const FESTIVAL_MOVEMENT_HEADERS = ["reportId","item","quantity","operation","date","createdById","createdByName","invoiceNumber"];
 const DIRECT_SALE_EVENT = "ترويج وبيع مباشر";
+const FESTIVAL_MOVEMENT_SALE_OP = "مبيعات";
+const FESTIVAL_MOVEMENT_EXPENSE_OP = "صرف";
 
 function ensureFestivalMovementSheet() {
   let sheet = aSheet.getSheetByName(FESTIVAL_MOVEMENT_SHEET_NAME);
   if (!sheet) {
     sheet = aSheet.insertSheet(FESTIVAL_MOVEMENT_SHEET_NAME);
     sheet.getRange(1,1,1,FESTIVAL_MOVEMENT_HEADERS.length).setValues([FESTIVAL_MOVEMENT_HEADERS]);
-  } else if (sheet.getLastRow() < 1) {
-    sheet.getRange(1,1,1,FESTIVAL_MOVEMENT_HEADERS.length).setValues([FESTIVAL_MOVEMENT_HEADERS]);
+    return sheet;
   }
+  if (sheet.getLastRow() < 1) {
+    sheet.getRange(1,1,1,FESTIVAL_MOVEMENT_HEADERS.length).setValues([FESTIVAL_MOVEMENT_HEADERS]);
+    return sheet;
+  }
+  // ترقية تلقائية وآمنة لأي عمود جديد ناقص (مثل invoiceNumber) دون المساس بالبيانات الحالية.
+  const existingHeaders = sheet.getRange(1,1,1,sheet.getLastColumn()).getValues()[0].map(h => String(h ?? '').trim());
+  FESTIVAL_MOVEMENT_HEADERS.forEach((headerName, idx) => {
+    const exists = existingHeaders.some(h => normalizeHeaderName(h) === normalizeHeaderName(headerName));
+    if (!exists) sheet.getRange(1, idx + 1).setValue(headerName);
+  });
   return sheet;
 }
 
-// يبحث عن نوع الحدث والحملة الخاصة بتقرير (مهرجان) محدد عبر id، بدون فلترة حسب المستخدم.
-function getReportEventAndCampaign(reportId) {
-  const id = String(reportId || '').trim();
-  if (!id) return null;
-  const report = getReports().find(r => String(r.id) === id);
-  if (!report) return null;
-  return { event: String(report.event || '').trim(), campaign: String(report.campaign || '').trim(), market: String(report.market || '').trim(), date: report.date || '' };
-}
-
-function getFestivalMovements(reportId) {
-  const id = String(reportId || '').trim();
-  if (!id) throw new Error('معرّف التقرير (المهرجان) مطلوب');
+// كل حركات مستخدم معيّن (سحب/مرتجع يدوي + صرف تلقائي + مبيعات يدوية عبر زر التصفير)، الأحدث أولاً.
+function getUserFestivalMovements(userId) {
+  const id = String(userId || '').trim();
+  if (!id) throw new Error('معرّف المستخدم مطلوب');
   const sheet = ensureFestivalMovementSheet();
   if (sheet.getLastRow() < 2) return { status:'success', movements: [] };
 
   const timezone = aSheet.getSpreadsheetTimeZone() || Session.getScriptTimeZone() || 'GMT';
   const data = sheet.getRange(2,1,sheet.getLastRow()-1,FESTIVAL_MOVEMENT_HEADERS.length).getValues();
   const movements = data
-    .filter(row => String(row[0]).trim() === id)
+    .filter(row => String(row[5]).trim() === id)
     .map(row => {
       const dateValue = row[4];
       const dateText = (dateValue instanceof Date && !isNaN(dateValue.getTime()))
         ? Utilities.formatDate(dateValue, timezone, 'yyyy-MM-dd HH:mm')
         : String(dateValue || '');
       return {
-        reportId: String(row[0]),
+        reportId: String(row[0] || ''),
         item: String(row[1]),
         quantity: Number(row[2]) || 0,
         operation: String(row[3]),
         date: dateText,
+        rawDate: (dateValue instanceof Date) ? dateValue.getTime() : 0,
         createdById: String(row[5] || ''),
-        createdByName: String(row[6] || '')
+        createdByName: String(row[6] || ''),
+        invoiceNumber: String(row[7] || '')
       };
     });
+
+  movements.sort((a,b) => b.rawDate - a.rawDate);
+  movements.forEach(m => delete m.rawDate);
   return { status:'success', movements: movements };
 }
 
+// يحسب لكل مادة: إجمالي السحب/المرتجع/الصرف التلقائي/المبيعات اليدوية، والمتبقي الصافي
+// = سحب - مرتجع - صرف - مبيعات، لمستخدم معيّن.
+function computeUserFestivalSummary(userId) {
+  const id = String(userId || '').trim();
+  if (!id) return [];
+  const sheet = ensureFestivalMovementSheet();
+  if (sheet.getLastRow() < 2) return [];
+
+  const data = sheet.getRange(2,1,sheet.getLastRow()-1,FESTIVAL_MOVEMENT_HEADERS.length).getValues();
+  const map = new Map();
+  data.filter(row => String(row[5]).trim() === id).forEach(row => {
+    const item = String(row[1] || '').trim();
+    if (!item) return;
+    if (!map.has(item)) map.set(item, { item, withdrawn:0, returned:0, expensed:0, sold:0 });
+    const entry = map.get(item);
+    const qty = Number(row[2]) || 0;
+    const operation = String(row[3] || '').trim();
+    if (operation === 'سحب') entry.withdrawn += qty;
+    else if (operation === 'مرتجع') entry.returned += qty;
+    else if (operation === FESTIVAL_MOVEMENT_EXPENSE_OP) entry.expensed += qty;
+    else if (operation === FESTIVAL_MOVEMENT_SALE_OP) entry.sold += qty;
+  });
+
+  return Array.from(map.values()).map(e => ({ ...e, remaining: e.withdrawn - e.returned - e.expensed - e.sold }));
+}
+
+// سجل يدوي لسحب/مرتجع مواد مرتبط بالمستخدم الحالي (وليس بتقرير معيّن بالضرورة)، مع رقم فاتورة اختياري.
 function addFestivalMovement(payload) {
   payload = payload || {};
-  const reportId = String(payload.reportId || '').trim();
-  if (!reportId) throw new Error('معرّف المهرجان (التقرير) مطلوب');
+  const createdById = String(payload.createdById || '').trim();
+  if (!createdById) throw new Error('تعذر تحديد هوية المستخدم');
+  const createdByName = String(payload.createdByName || '').trim();
+  const reportId = String(payload.reportId || '').trim(); // اختياري: يبقى فارغاً للحركات اليدوية
 
   const items = Array.isArray(payload.items) ? payload.items : [];
   if (!items.length) throw new Error('يرجى إضافة مادة واحدة على الأقل');
 
-  const reportInfo = getReportEventAndCampaign(reportId);
-  if (!reportInfo) throw new Error('لم يتم العثور على التقرير (المهرجان) المحدد');
-  if (reportInfo.event !== DIRECT_SALE_EVENT) {
-    throw new Error('سحب/مرتجع المواد متاح فقط للتقارير من نوع "' + DIRECT_SALE_EVENT + '"');
-  }
-
-  const createdById = String(payload.createdById || '').trim();
-  const createdByName = String(payload.createdByName || '').trim();
   const now = new Date();
-
   const rows = items.map(it => {
     const item = String((it && it.item) || '').trim();
     const quantity = Number(it && it.quantity);
     const operation = String((it && it.operation) || '').trim();
+    const invoiceNumber = String((it && it.invoiceNumber) || '').trim();
     if (!item) throw new Error('اسم المادة مطلوب');
     if (!Number.isFinite(quantity) || quantity <= 0) throw new Error('الكمية يجب أن تكون رقماً أكبر من صفر (المادة: ' + item + ')');
     if (operation !== 'سحب' && operation !== 'مرتجع') throw new Error('العملية يجب أن تكون "سحب" أو "مرتجع" (المادة: ' + item + ')');
-    return [reportId, item, quantity, operation, now, createdById, createdByName];
+    return [reportId, item, quantity, operation, now, createdById, createdByName, invoiceNumber];
   });
 
   const sheet = ensureFestivalMovementSheet();
@@ -849,61 +883,100 @@ function addFestivalMovement(payload) {
   return { status:'success', added: rows.length };
 }
 
-// يجمع صافي (سحب - مرتجع) لكل مادة ضمن تقرير معيّن، ويرسل الكميات المتبقية
-// إلى ورقة sales لنفس التقرير، بحيث تظهر مباشرة ضمن جدول المبيعات في صفحة التقرير.
-function sendRemainingToSales(payload) {
-  payload = payload || {};
-  const reportId = String(payload.reportId || '').trim();
-  if (!reportId) throw new Error('معرّف التقرير (المهرجان) مطلوب');
+// تُستدعى تلقائياً من handleReportSubmission عند حفظ أو تعديل أي تقرير.
+// تُسجّل كميات جدول المصاريف كحركة "صرف" باسم صاحب التقرير، فتُطرح تلقائياً من محصلته.
+// عند تعديل تقرير موجود، تُستبدل حركات "صرف" السابقة لنفس التقرير بالقيم الجديدة (بدون تكرار).
+function syncReportExpensesToFestivalMovement(reportData) {
+  reportData = reportData || {};
 
-  const items = Array.isArray(payload.items) ? payload.items : [];
-  if (!items.length) throw new Error('لا توجد كميات متبقية لإرسالها إلى المبيعات');
+  const reportId = String(reportData.id || '').trim();
+  if (!reportId) return;
 
-  const reportInfo = getReportEventAndCampaign(reportId);
-  if (!reportInfo) throw new Error('لم يتم العثور على التقرير (المهرجان) المحدد');
-  if (reportInfo.event !== DIRECT_SALE_EVENT) {
-    throw new Error('هذا الإجراء متاح فقط للتقارير من نوع "' + DIRECT_SALE_EVENT + '"');
+  const ownerId = String(reportData.createdById || '').trim();
+  const ownerName = String(reportData.createdByName || '').trim();
+  const expenses = Array.isArray(reportData.expenses) ? reportData.expenses : [];
+
+  const sheet = ensureFestivalMovementSheet();
+  const lastRow = sheet.getLastRow();
+  const existingRows = lastRow > 1 ? sheet.getRange(2,1,lastRow-1,FESTIVAL_MOVEMENT_HEADERS.length).getValues() : [];
+
+  // إزالة أي حركات "صرف" مسجلة سابقاً لنفس التقرير (لتفادي تكرارها عند التعديل).
+  const kept = existingRows.filter(row => !(String(row[0]).trim() === reportId && String(row[3]).trim() === FESTIVAL_MOVEMENT_EXPENSE_OP));
+
+  const now = new Date();
+  const newExpenseRows = expenses
+    .map(e => ({ item: String((e && e.item) || '').trim(), quantity: Number(e && e.quantity) || 0 }))
+    .filter(e => e.item && e.quantity > 0)
+    .map(e => [reportId, e.item, e.quantity, FESTIVAL_MOVEMENT_EXPENSE_OP, now, ownerId, ownerName, '']);
+
+  const finalRows = kept.concat(newExpenseRows);
+
+  sheet.clearContents();
+  sheet.getRange(1,1,1,FESTIVAL_MOVEMENT_HEADERS.length).setValues([FESTIVAL_MOVEMENT_HEADERS]);
+  if (finalRows.length) {
+    sheet.getRange(2,1,finalRows.length,FESTIVAL_MOVEMENT_HEADERS.length).setValues(finalRows);
   }
+}
 
-  // بناء جدول أسعار من بيانات المنتجات المخزّنة، حسب حملة التقرير.
-  const initialData = getInitialData(false);
-  const productsByCampaign = initialData.products || {};
-  const campaign = reportInfo.campaign;
-  const relevantLists = (campaign === 'شاملة' || campaign === 'مهرجان')
-    ? Object.values(productsByCampaign).flat()
-    : (productsByCampaign[campaign] || []);
-  const priceLookup = new Map();
-  relevantLists.forEach(p => { if (p && p.name && !priceLookup.has(p.name)) priceLookup.set(p.name, Number(p.price) || 0); });
+// تُستدعى يدوياً فقط (زر "إرسال صافي المحصلة إلى المبيعات") لكل مادة معها صافٍ موجب:
+// تُضاف حركة "مبيعات" بقيمة الصافي الحالي بالضبط، فتصبح محصلة تلك المادة صفراً فور الإرسال.
+function closeOutUserTallyToSales(payload) {
+  payload = payload || {};
+  const createdById = String(payload.createdById || '').trim();
+  if (!createdById) throw new Error('تعذر تحديد هوية المستخدم');
+  const createdByName = String(payload.createdByName || '').trim();
+  const selectedReportId = String(payload.reportId || '').trim();
+  if (!selectedReportId) throw new Error('يرجى اختيار التقرير الذي ستضاف إليه المبيعات');
 
-  if (!salesSheet) throw new Error('ورقة sales غير موجودة');
-  const lastRow = salesSheet.getLastRow();
-  const existing = lastRow > 1 ? salesSheet.getRange(2,1,lastRow-1,4).getValues() : [];
+  const summary = computeUserFestivalSummary(createdById);
+  const itemsToClose = summary.filter(e => e.remaining > 0);
+  if (!itemsToClose.length) return { status:'success', added: 0, message: 'لا توجد كميات متبقية (صافي موجب) لإرسالها' };
 
-  let updated = 0, added = 0;
-  const rowsToAppend = [];
-  items.forEach(it => {
-    const item = String((it && it.item) || '').trim();
-    const quantity = Number(it && it.quantity) || 0;
-    if (!item || quantity <= 0) return;
-    const price = priceLookup.has(item) ? priceLookup.get(item) : (Number(it && it.price) || 0);
-    const existingIndex = existing.findIndex(row => String(row[0]).trim() === reportId && String(row[1]).trim() === item);
-    if (existingIndex !== -1) {
-      const sheetRow = existingIndex + 2; // +1 for header, +1 because getRange started at row 2
-      salesSheet.getRange(sheetRow, 3, 1, 2).setValues([[price, quantity]]);
-      updated++;
-    } else {
-      rowsToAppend.push([reportId, item, price, quantity]);
-      added++;
-    }
+  // نقرأ مبيعات التقرير المختار للحصول على السعر الصحيح لكل مادة.
+  // إذا لم تكن المادة موجودة في التقرير، نستخدم السعر الحالي من Products كاحتياط.
+  const report = getReports('', 'admin', '').find(r => String(r.id) === selectedReportId);
+  if (!report) throw new Error('التقرير المحدد غير موجود');
+
+  const reportPriceMap = new Map();
+  (Array.isArray(report.sales) ? report.sales : []).forEach(s => {
+    const product = String(s.product || '').trim();
+    if (!product) return;
+    const price = Number(s.price);
+    if (Number.isFinite(price)) reportPriceMap.set(product, price);
   });
 
-  if (rowsToAppend.length) {
-    salesSheet.getRange(salesSheet.getLastRow() + 1, 1, rowsToAppend.length, 4).setValues(rowsToAppend);
+  const productsSheet = aSheet.getSheetByName('Products');
+  const productPriceMap = new Map();
+  if (productsSheet && productsSheet.getLastRow() > 1) {
+    const values = productsSheet.getDataRange().getValues();
+    const headers = values[0] || [];
+    const productCol = getColumnIndex(headers, ['product','المادة','اسم المادة'], 1);
+    const priceCol = getColumnIndex(headers, ['price','السعر'], 2);
+    const cancelledCol = getColumnIndex(headers, ['إلغاء المادة','cancelled','canceled','الغاء المادة'], 6);
+    values.slice(1).forEach(row => {
+      const product = String(row[productCol] || '').trim();
+      if (!product || isCancelledValue(row[cancelledCol])) return;
+      const price = Number(row[priceCol]);
+      if (Number.isFinite(price) && !productPriceMap.has(product)) productPriceMap.set(product, price);
+    });
   }
 
-  if (updated || added) {
-    cache.removeAll(['allReports','allReports_v2','allReports_v3_user_history']);
-  }
+  const now = new Date();
+  const salesRows = itemsToClose.map(e => {
+    const price = reportPriceMap.has(e.item) ? reportPriceMap.get(e.item) : (productPriceMap.get(e.item) || 0);
+    return [selectedReportId, e.item, Number(price) || 0, e.remaining];
+  });
 
-  return { status:'success', updated: updated, added: added };
+  // 1) تسجَّل المبيعات في sales مع reportId للتقرير الذي اختاره المستخدم.
+  if (!salesSheet) throw new Error("Sheet 'sales' غير موجودة");
+  salesSheet.getRange(salesSheet.getLastRow() + 1, 1, salesRows.length, 4).setValues(salesRows);
+
+  // 2) وتسجَّل في festivalMovement كحركة مبيعات مرتبطة بنفس التقرير.
+  const movementRows = itemsToClose.map(e => [selectedReportId, e.item, e.remaining, FESTIVAL_MOVEMENT_SALE_OP, now, createdById, createdByName, '']);
+  const sheet = ensureFestivalMovementSheet();
+  sheet.getRange(sheet.getLastRow() + 1, 1, movementRows.length, FESTIVAL_MOVEMENT_HEADERS.length).setValues(movementRows);
+
+  SpreadsheetApp.flush();
+  cache.remove('allReports_v3_user_history');
+  return { status:'success', added: movementRows.length, salesAdded: salesRows.length, reportId: selectedReportId };
 }

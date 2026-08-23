@@ -56,34 +56,21 @@
 
     <div class="main-container">
 
-        <!-- Report selection card -->
-        <div class="card form-card" id="reportSelectCard">
+        <div class="card form-card">
             <div class="card-header">
-                <span><i class="fa-solid fa-boxes-stacked me-2"></i>سحب / مرتجع مواد المهرجان</span>
+                <span><i class="fa-solid fa-boxes-stacked me-2"></i>سحب / مرتجع مواد — محصلتي الشخصية</span>
             </div>
             <div class="card-body">
-                <div class="alert alert-info py-2 mb-3">
-                    هذه الصفحة مخصّصة فقط للتقارير من نوع الحدث <strong>"ترويج وبيع مباشر"</strong>. اختر تقريراً (مهرجاناً) من القائمة، أو افتحه مباشرة من زر «سحب / مرتجع مواد» في سجل التعديلات.
+                <div class="alert alert-info py-2 mb-0">
+                    كل ما تسجّله هنا مرتبط بحسابك أنت: كل مستخدم يرى فقط سحبه ومرتجعه ومحصلة المواد الباقية معه.
+                    عند حفظ أي تقرير يحتوي على مصاريف، تُطرح كميات المصاريف تلقائياً
+                    من محصلتك (تظهر في السجل كحركة "صرف (تلقائي)"). أما إرسال صافي المحصلة إلى المبيعات يتم <strong>يدوياً</strong>: عند الضغط على الزر تختار التقرير الذي ستضاف إليه هذه المبيعات.
                 </div>
-                <div class="row g-3 align-items-end">
-                    <div class="col-md-8">
-                        <label class="form-label">اختر التقرير (المهرجان)</label>
-                        <select id="reportSelect" class="form-select">
-                            <option value="" selected disabled>اختر تقريراً من نوع "ترويج وبيع مباشر"...</option>
-                        </select>
-                    </div>
-                    <div class="col-md-4">
-                        <button type="button" id="loadReportBtn" class="btn btn-primary w-100" disabled>
-                            <i class="fa-solid fa-folder-open me-1"></i> فتح
-                        </button>
-                    </div>
-                </div>
-                <div id="reportInfoBox" class="alert alert-success mt-3 d-none"></div>
-                <div id="reportGuardBox" class="alert alert-warning mt-3 d-none"></div>
+                <div id="reportInfoBox" class="alert alert-success mt-3"></div>
             </div>
         </div><br/>
 
-        <div id="movementWorkArea" class="d-none">
+        <div id="movementWorkArea">
 
             <!-- Movement entry card -->
             <div class="card form-card">
@@ -100,7 +87,7 @@
                     <div class="table-responsive">
                         <table class="table table-bordered table-hover mb-0">
                             <thead class="table-light">
-                                <tr><th>المادة</th><th style="width:140px;">الكمية</th><th style="width:170px;">العملية</th><th style="width:90px;">إجراء</th></tr>
+                                <tr><th>المادة</th><th style="width:120px;">الكمية</th><th style="width:160px;">رقم الفاتورة</th><th style="width:170px;">العملية</th><th style="width:90px;">إجراء</th></tr>
                             </thead>
                             <tbody id="movement-table-body"></tbody>
                         </table>
@@ -123,10 +110,10 @@
                     <div class="table-responsive">
                         <table class="table table-sm table-bordered mb-0">
                             <thead class="table-light">
-                                <tr><th>المادة</th><th>الكمية</th><th>العملية</th><th>التاريخ</th><th>المستخدم</th></tr>
+                                <tr><th>المادة</th><th>الكمية</th><th>رقم الفاتورة</th><th>العملية</th><th>التاريخ</th><th>التقرير</th><th>المستخدم</th></tr>
                             </thead>
                             <tbody id="movement-history-body">
-                                <tr><td colspan="5" class="text-center text-muted">لا توجد حركات مسجلة بعد</td></tr>
+                                <tr><td colspan="7" class="text-center text-muted">لا توجد حركات مسجلة بعد</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -136,33 +123,65 @@
             <!-- Inventory summary card -->
             <div class="card form-card">
                 <div class="card-header collapsible-header" data-bs-toggle="collapse" data-bs-target="#collapseInventorySummary">
-                    <span><i class="fa-solid fa-clipboard-list me-2"></i>محصلة جرد المواد</span>
+                    <span><i class="fa-solid fa-clipboard-list me-2"></i>محصلة المواد الباقية معي</span>
                     <i class="fa-solid fa-chevron-up collapse-icon"></i>
                 </div>
                 <div id="collapseInventorySummary" class="collapse show">
                     <div class="card-body border-bottom bg-light">
-                        <div class="small text-muted">
-                            المتبقي (الصافي) = إجمالي كميات السحب - إجمالي كميات المرتجع لكل مادة. هذه هي الكمية التي يمكن اعتبارها قد استُهلكت/بيعت فعلياً ضمن هذا المهرجان.
-                        </div>
+                        <!-- <div class="small text-muted">
+                            المتبقي معي (الصافي) = إجمالي السحب − إجمالي المرتجع − إجمالي الصرف (تلقائي من
+                            تقارير "ترويج وبيع مباشر") − إجمالي المبيعات (تُرسَل يدوياً عبر الزر أدناه).
+                        </div> -->
                     </div>
                     <div class="table-responsive">
                         <table class="table table-bordered mb-0">
                             <thead class="table-light">
-                                <tr><th>المادة</th><th>إجمالي السحب</th><th>إجمالي المرتجع</th><th>المتبقي (الصافي)</th></tr>
+                                <tr><th>المادة</th><th>إجمالي السحب</th><th>إجمالي المرتجع</th><th>إجمالي الصرف (تلقائي من جميع التقارير)</th><th>إجمالي المبيعات المُرسَلة</th><th>المتبقي معي (الصافي)</th></tr>
                             </thead>
                             <tbody id="inventory-summary-body">
-                                <tr><td colspan="4" class="text-center text-muted">لا توجد بيانات بعد</td></tr>
+                                <tr><td colspan="6" class="text-center text-muted">لا توجد بيانات بعد</td></tr>
                             </tbody>
                         </table>
                     </div>
                     <div class="card-footer bg-light text-center">
-                        <button type="button" id="sendRemainingBtn" class="btn btn-primary">
-                            <i class="fa-solid fa-paper-plane me-1"></i> إرسال الكميات الباقية للمبيعات
+                        <button type="button" id="closeOutTallyBtn" class="btn btn-primary">
+                            <i class="fa-solid fa-paper-plane me-1"></i> إرسال صافي المحصلة إلى المبيعات
                         </button>
+                        <!-- <div class="small text-muted mt-2">
+                            سيتم أولاً اختيار التقرير الذي ستضاف إليه المبيعات، ثم يُسجّل الصافي في sales وfestivalMovement وتصبح المحصلة صفراً فوراً.
+                        </div> -->
                     </div>
                 </div>
             </div>
 
+        </div>
+    </div>
+
+    <!-- MODAL FOR REPORT SELECTION -->
+    <div class="modal fade" id="salesReportSelectionModal" tabindex="-1" aria-labelledby="salesReportSelectionModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="salesReportSelectionModalLabel">اختيار التقرير لإضافة المبيعات</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <input type="text" id="salesReportSearchInput" class="form-control" placeholder="ابحث برقم التقرير أو الحملة أو المحل أو التاريخ...">
+                    </div>
+                    <div id="salesReportSelectionStatus" class="small text-muted mb-2"></div>
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle" id="salesReportSelectionTable">
+                            <thead><tr><th style="width:50px;">اختيار</th><th>رقم التقرير</th><th>الحملة</th><th>المحل / المول</th><th>التاريخ</th><th>الحدث</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إغلاق</button>
+                    <button type="button" class="btn btn-primary" id="confirmSalesReportBtn">متابعة وإرسال</button>
+                </div>
+            </div>
         </div>
     </div>
 
