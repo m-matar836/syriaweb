@@ -2,7 +2,7 @@
 //   script.js - النسخة النهائية مع إصلاح مشكلة تفريغ الحقول
 // ===================================================================
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyKp6o0bNBhkXluoAfNnfK0A0o51x2jR3qkaR1_ETD5wF0_1fRfv1s5YJ17UVUuLAX4/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzf9oBzFT8q9l8Thk79j94Xe7N1IJy3Ejwj9y3UZFOxsEwMvKxDhg2uLmRveWcoQGmf/exec";
 const CACHE_DURATION_MINUTES = 1440;
 const FORM_STATE_KEY = 'reportFormLastState'; 
 const EDIT_STATE_KEY = 'reportToEdit';
@@ -10,6 +10,15 @@ const getCurrentUser = () => JSON.parse(localStorage.getItem('currentUser')) || 
 const getAuthToken = () => getCurrentUser().authToken || '';
 const isAdminUser = user => String(user?.role || '').trim().toLowerCase() === 'admin';
 const isManagerUser = user => ['manager', 'مدير'].includes(String(user?.role || '').trim().toLowerCase());
+const normalizeEmployeeRole = value => String(value ?? '').trim()
+    .replace(/[\u064B-\u065F\u0670\u06D6-\u06ED]/g, '') // إزالة التشكيل
+    .replace(/[إأآا]/g, 'ا').replace(/ى/g, 'ي').replace(/ؤ/g, 'و').replace(/ئ/g, 'ي')
+    .replace(/ة/g, 'ه').replace(/ـ/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+const employeeHasRole = (employee, roles) => {
+    const role = normalizeEmployeeRole(employee?.role);
+    return roles.some(item => role === normalizeEmployeeRole(item) || role.includes(normalizeEmployeeRole(item)));
+};
 // V25: in-memory caches eliminate repeated localStorage JSON parsing during the same page session.
 let memoryDbCache = null;
 let memoryReportsCache = null;
@@ -251,7 +260,7 @@ async function getDbData() {
 // ===================================================================
 //                 CACHE REFRESH / FAST DATA UPDATE
 // ===================================================================
-const APP_DB_VERSION = 'v32-role-permissions';
+const APP_DB_VERSION = 'v33-employee-lists-fix';
 const APP_DB_KEY = `appDB_${APP_DB_VERSION}`;
 const APP_DB_TS_KEY = `dbCacheTimestamp_${APP_DB_VERSION}`;
 
@@ -610,6 +619,7 @@ async function handleReportPage() {
 
             // Re-run dependent product filtering without touching existing rows.
             if (typeof updateProductAvailability === 'function') updateProductAvailability();
+             if (typeof populateEmployees === 'function') populateEmployees();
         } catch (e) {
             console.warn('In-page DB refresh UI update skipped:', e);
         }
@@ -757,8 +767,9 @@ async function handleReportPage() {
     };
 
     const populateEmployees = (report = {}) => {
-        const inventoryStaff = DB.employees.filter(e => e.role === 'مسؤول جرد').map(e => e.name);
-        const coordinators = DB.employees.filter(e => e.role === 'منسق نقطة').map(e => e.name);
+        const employees = Array.isArray(DB.employees) ? DB.employees : [];
+        const inventoryStaff = employees.filter(e => employeeHasRole(e, ['مسؤول جرد', 'مسؤول الجرد', 'مسؤول جرد مواد', 'جرد', 'inventory'])).map(e => e.name);
+        const coordinators = employees.filter(e => employeeHasRole(e, ['منسق نقطة', 'منسق النقطة', 'منسق', 'coordinator'])).map(e => e.name);
         populateSelect(document.getElementById('inventoryDependency'), inventoryStaff, report.inventoryDependency);
         populateSelect(document.getElementById('coordinator'), coordinators, report.coordinator);
         const reportPromoters = Array.isArray(report.promoters)
@@ -776,7 +787,7 @@ async function handleReportPage() {
 
     const renderPromotersSelection = () => {
         const promoters = (Array.isArray(DB.employees) ? DB.employees : [])
-            .filter(e => e && String(e.role || '').trim() === 'مروج')
+            .filter(e => e && employeeHasRole(e, ['مروج', 'مروّج', 'promoter']))
             .map(e => String(e.name ?? '').trim())
             .filter(isValidPromoterName)
             .filter((name, index, arr) => arr.indexOf(name) === index);

@@ -12,7 +12,7 @@ const usersSheet = aSheet.getSheetByName("Users");
 const cache = CacheService.getScriptCache();
 const CACHE_EXPIRATION_SECONDS = 3600;
 const AUTH_CACHE_PREFIX = 'promotionAuth_';
-const INITIAL_DATA_CACHE_VERSION = 'v26-role-permissions';
+const INITIAL_DATA_CACHE_VERSION = 'v34-employee-column-detection-fix';
 const PRODUCT_LOOKUP_CACHE_VERSION = 'v25-product-lookup';
 const MOVEMENT_CACHE_VERSION = 'v31-movement-cache';
 
@@ -152,17 +152,105 @@ function assertReportOwnerAllowed(actor, ownerId, ownerName) {
   }
 }
 
+function normalizeArabicText(value) {
+  return String(value ?? '')
+    .trim()
+    .replace(/[\u064B-\u065F\u0670\u06D6-\u06ED]/g, '') // إزالة التشكيل
+    .replace(/[إأآا]/g, 'ا')
+    .replace(/ى/g, 'ي')
+    .replace(/ؤ/g, 'و')
+    .replace(/ئ/g, 'ي')
+    .replace(/ة/g, 'ه')
+    .replace(/ـ/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
 function normalizeHeaderName(value) {
-  return String(value ?? '').trim().replace(/\s+/g,' ').toLowerCase();
+  return normalizeArabicText(value);
+}
+
+// يبحث عن أول عمود يطابق أحد الأسماء المرشحة (مطابقة تامة، ثم مطابقة جزئية باحتواء
+// أحد الطرفين للآخر) بعد تطبيع النص العربي (توحيد الألف/التاء المربوطة، إزالة التشكيل...).
+// يُرجع -1 إن لم يُعثر على أي مطابقة (بلا قيمة احتياطية)، ليقرر المستدعي كيف يتصرف.
+function findHeaderColumnIndex(headers, names) {
+  const normalizedHeaders = headers.map(normalizeHeaderName);
+  const normalizedNames = names.map(normalizeHeaderName).filter(Boolean);
+  for (const name of normalizedNames) {
+    const idx = normalizedHeaders.indexOf(name);
+    if (idx !== -1) return idx;
+  }
+  for (let i = 0; i < normalizedHeaders.length; i++) {
+    const h = normalizedHeaders[i];
+    if (!h) continue;
+    if (normalizedNames.some(name => name && (h.includes(name) || name.includes(h)))) return i;
+  }
+  return -1;
 }
 
 function getColumnIndex(headers, names, fallback) {
-  const normalized = headers.map(normalizeHeaderName);
-  for (const name of names) {
-    const idx = normalized.indexOf(normalizeHeaderName(name));
-    if (idx !== -1) return idx;
+  const idx = findHeaderColumnIndex(headers, names);
+  return idx !== -1 ? idx : fallback;
+}
+
+// يبحث عن ورقة مطابقة لأحد الأسماء المرشحة، ثم يجرّب مطابقة مرنة (بعد تطبيع النص) على كل
+// أسماء الأوراق الموجودة فعلياً في الملف. هذا يتحمّل اختلاف تسمية التبويب (مسافات، تشكيل،
+// "الموظفين" بدل "Employees"...الخ) دون الحاجة لإعادة تسمية التبويب في شيت المستخدم.
+function findSheetByCandidateNames(candidateNames) {
+  for (const n of candidateNames) {
+    const s = aSheet.getSheetByName(n);
+    if (s) return s;
   }
-  return fallback;
+  const normalizedCandidates = candidateNames.map(normalizeArabicText);
+  const sheets = aSheet.getSheets();
+  for (const sheet of sheets) {
+    const normalizedName = normalizeArabicText(sheet.getName());
+    if (normalizedCandidates.includes(normalizedName)) return sheet;
+  }
+  return null;
+}
+
+// كلمات دالة معروفة على "الدور الوظيفي" للموظف، تُستخدم لاكتشاف عمود الدور فعلياً من
+// محتوى بياناته في حال تعذّر التعرّف عليه من عنوان العمود.
+const KNOWN_EMPLOYEE_ROLE_KEYWORDS = [
+  'مسؤول جرد','مسؤول الجرد','جرد','منسق نقطة','منسق','مروج','مروّج','مشرف','مدير',
+  'مسؤول مبيعات','مسؤول','admin','manager','user','promoter','coordinator','inventory','supervisor'
+];
+
+function detectRoleColumnByValues(dataRows, excludeCols) {
+  let bestCol = -1, bestScore = -1;
+  const colCount = dataRows.reduce((max,row) => Math.max(max, row.length), 0);
+  for (let c = 0; c < colCount; c++) {
+    if (excludeCols.includes(c)) continue;
+    let score = 0;
+    dataRows.forEach(row => {
+      const v = normalizeArabicText(row[c]);
+      if (!v) return;
+      if (KNOWN_EMPLOYEE_ROLE_KEYWORDS.some(k => v.includes(normalizeArabicText(k)))) score++;
+    });
+    if (score > bestScore) { bestScore = score; bestCol = c; }
+  }
+  return bestScore > 0 ? bestCol : -1;
+}
+
+// عمود "المسؤول المباشر" غالباً يحتوي أسماء موجودة أصلاً ضمن عمود اسم الموظف نفسه
+// (كل موظف يتبع لموظف آخر مذكور بنفس الورقة)، فنكتشفه عبر مطابقة القيم لا العنوان.
+function detectMgrColumnByValues(dataRows, nameCol, excludeCols) {
+  const nameSet = new Set(dataRows.map(row => normalizeArabicText(row[nameCol])).filter(Boolean));
+  let bestCol = -1, bestScore = -1;
+  const colCount = dataRows.reduce((max,row) => Math.max(max, row.length), 0);
+  for (let c = 0; c < colCount; c++) {
+    if (c === nameCol || excludeCols.includes(c)) continue;
+    let score = 0;
+    dataRows.forEach(row => {
+      const v = normalizeArabicText(row[c]);
+      if (v && nameSet.has(v)) score++;
+    });
+    if (score > bestScore) { bestScore = score; bestCol = c; }
+  }
+  return bestScore > 0 ? bestCol : -1;
 }
 
 function isCancelledValue(value) {
@@ -203,17 +291,50 @@ function getInitialData(forceRefresh) {
 
   // Read only the sheets required by the application instead of scanning every
   // spreadsheet tab on each cache rebuild. This is noticeably faster on large files.
-  const requiredSheetNames = ["Locations","Products","ProductsOfCompetitor","Employees","ExpenseItems","Users"];
+  // كل ورقة لها أسماء مرشحة متعددة لتحمّل اختلاف تسمية التبويب فعلياً في ملف المستخدم.
+  const requiredSheetCandidates = {
+    Locations: ["Locations","المواقع","الأماكن","المناطق"],
+    Products: ["Products","المنتجات","المواد","المنتجات والاسعار"],
+    ProductsOfCompetitor: ["ProductsOfCompetitor","مواد المنافس","منتجات المنافس"],
+    Employees: ["Employees","الموظفين","الموظفون","الموظفين والمروجين","Staff","employees","فريق العمل"],
+    ExpenseItems: ["ExpenseItems","بنود المصاريف","المصاريف","بنود المصروفات"],
+    Users: ["Users","المستخدمين","المستخدمون"]
+  };
   const sheetData = {};
-  requiredSheetNames.forEach(sheetName => {
-    const sheet = aSheet.getSheetByName(sheetName);
+  Object.keys(requiredSheetCandidates).forEach(key => {
+    const sheet = findSheetByCandidateNames(requiredSheetCandidates[key]);
     if (sheet && sheet.getLastRow() > 0) {
-      sheetData[sheetName] = sheet.getDataRange().getValues();
+      sheetData[key] = sheet.getDataRange().getValues();
     }
   });
 
   const locations = (sheetData.Locations || [[]]).slice(1).map(row => ({gov:row[0], region:row[1], market:row[2]}));
-  const employees = (sheetData.Employees || [[]]).slice(1).map(row => ({name:row[0], role:row[1], mgr:row[2] || ''}));
+  const employeeRows = sheetData.Employees || [];
+  const employeeHeaders = employeeRows[0] || [];
+  const employeeDataRows = employeeRows.slice(1);
+
+  const employeeNameColFound = findHeaderColumnIndex(employeeHeaders, ['name','employee','اسم الموظف','اسم الموظف/المروج','الاسم','الموظف']);
+  const employeeNameCol = employeeNameColFound !== -1 ? employeeNameColFound : 0;
+
+  const employeeRoleColFound = findHeaderColumnIndex(employeeHeaders, ['role','الدور','الصفة','نوع الموظف','الوظيفة','المسمى الوظيفي','الصفة الوظيفية','الدور الوظيفي']);
+  let employeeRoleCol = employeeRoleColFound;
+  if (employeeRoleCol === -1) {
+    employeeRoleCol = detectRoleColumnByValues(employeeDataRows, [employeeNameCol]);
+    if (employeeRoleCol === -1) employeeRoleCol = (employeeNameCol === 1 ? 0 : 1);
+  }
+
+  const employeeMgrColFound = findHeaderColumnIndex(employeeHeaders, ['mgr','manager','المسؤول المباشر','المدير المباشر','مسؤول','التبعية','يتبع ل','يتبع الى','تابع ل']);
+  let employeeMgrCol = employeeMgrColFound;
+  if (employeeMgrCol === -1 || employeeMgrCol === employeeRoleCol || employeeMgrCol === employeeNameCol) {
+    const detected = detectMgrColumnByValues(employeeDataRows, employeeNameCol, [employeeRoleCol]);
+    employeeMgrCol = detected !== -1 ? detected : (employeeNameCol === 2 ? 0 : 2);
+  }
+
+  const employees = employeeDataRows.map(row => ({
+    name: String(row[employeeNameCol] ?? '').trim(),
+    role: String(row[employeeRoleCol] ?? '').trim(),
+    mgr: String(row[employeeMgrCol] ?? '').trim()
+  })).filter(e => e.name);
   const users = (sheetData.Users || [[]]).slice(1).map(row => ({id:row[0], role:row[3], name:row[4]}));
 
   const products = {};
