@@ -2,13 +2,19 @@
 //   script.js - النسخة النهائية مع إصلاح مشكلة تفريغ الحقول
 // ===================================================================
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxia8424tM-ntc9EyUBx6zeyKcSDschjOkZTIi7JJOQUiaoqik3yYH1BX50C1e5uedH/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyKp6o0bNBhkXluoAfNnfK0A0o51x2jR3qkaR1_ETD5wF0_1fRfv1s5YJ17UVUuLAX4/exec";
 const CACHE_DURATION_MINUTES = 1440;
 const FORM_STATE_KEY = 'reportFormLastState'; 
 const EDIT_STATE_KEY = 'reportToEdit';
+const getCurrentUser = () => JSON.parse(localStorage.getItem('currentUser')) || JSON.parse(sessionStorage.getItem('currentUser')) || {};
+const getAuthToken = () => getCurrentUser().authToken || '';
+const isAdminUser = user => String(user?.role || '').trim().toLowerCase() === 'admin';
+const isManagerUser = user => ['manager', 'مدير'].includes(String(user?.role || '').trim().toLowerCase());
 // V25: in-memory caches eliminate repeated localStorage JSON parsing during the same page session.
 let memoryDbCache = null;
 let memoryReportsCache = null;
+let barcodeIndexCache = null;
+let reportsRequestInFlight = null;
 
 let originalCreatedAt = null; 
 
@@ -39,7 +45,7 @@ async function queueReportOffline(reportData) {
     return new Promise((resolve, reject) => {
         const tx = db.transaction(OFFLINE_QUEUE_STORE, 'readwrite');
         tx.objectStore(OFFLINE_QUEUE_STORE).put({
-            localId: `${reportData.id}_${Date.now()}`,
+            localId: String(reportData.id || `offline_${Date.now()}`),
             reportData,
             createdAt: Date.now()
         });
@@ -73,21 +79,21 @@ async function syncPendingReports() {
     let pending = [];
     try { pending = await getPendingReports(); } catch (e) { return; }
     let syncedAny = false;
-    for (const item of pending) {
-        try {
-            const res = await fetch(SCRIPT_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({ action: 'submitReport', payload: item.reportData })
-            });
-            const result = await res.json();
-            if (result.status !== 'success') throw new Error(result.message || 'فشل المزامنة');
-            await removePendingReport(item.localId);
-            syncedAny = true;
-        } catch (error) {
-            console.warn('Offline sync stopped:', error);
-            break;
+    for (const item of pending.sort((a,b) => Number(a.createdAt||0)-Number(b.createdAt||0))) {
+        let synced = false;
+        for (let attempt=1; attempt<=3 && !synced; attempt++) {
+            try {
+                const res = await fetch(SCRIPT_URL, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify({action:'submitReport',payload:item.reportData}) });
+                const result = await res.json();
+                if(result.status!=='success') throw new Error(result.message || 'فشل المزامنة');
+                await removePendingReport(item.localId);
+                syncedAny=true; synced=true;
+            } catch(error) {
+                console.warn(`Offline sync attempt ${attempt} failed:`, error);
+                if(attempt<3) await new Promise(r=>setTimeout(r,Math.min(4000,500*Math.pow(2,attempt-1))));
+            }
         }
+        if(!synced) break;
     }
     if (syncedAny) {
         // Syncing reports does not require rebuilding master data. Invalidate only
@@ -215,6 +221,7 @@ async function getDbData() {
         // استخدم الكاش مباشرة إذا كان Offline، حتى لو انتهت مدته.
         if (!navigator.onLine || (cacheTimestamp && ageMinutes < CACHE_DURATION_MINUTES)) {
             memoryDbCache = JSON.parse(cachedDB);
+            barcodeIndexCache = null;
             return memoryDbCache;
         }
     }
@@ -234,6 +241,7 @@ async function getDbData() {
         if (cachedDB) {
             console.warn('Using cached DB because network request failed:', error);
             memoryDbCache = JSON.parse(cachedDB);
+            barcodeIndexCache = null;
             return memoryDbCache;
         }
         throw error;
@@ -243,7 +251,7 @@ async function getDbData() {
 // ===================================================================
 //                 CACHE REFRESH / FAST DATA UPDATE
 // ===================================================================
-const APP_DB_VERSION = 'v26-hyper-speed';
+const APP_DB_VERSION = 'v32-role-permissions';
 const APP_DB_KEY = `appDB_${APP_DB_VERSION}`;
 const APP_DB_TS_KEY = `dbCacheTimestamp_${APP_DB_VERSION}`;
 
@@ -304,6 +312,7 @@ async function refreshAppCache({ silent = false, refreshReports = true } = {}) {
 
         // Replace the cache only after a complete successful response.
         memoryDbCache = freshDB;
+        barcodeIndexCache = null;
         localStorage.setItem(APP_DB_KEY, JSON.stringify(freshDB));
         localStorage.setItem(APP_DB_TS_KEY, String(Date.now()));
 
@@ -312,7 +321,7 @@ async function refreshAppCache({ silent = false, refreshReports = true } = {}) {
             try {
                 const currentUser = JSON.parse(localStorage.getItem('currentUser')) || JSON.parse(sessionStorage.getItem('currentUser'));
                 if (currentUser) {
-                    const reportUrl = `${SCRIPT_URL}?action=getReports&userId=${encodeURIComponent(String(currentUser.id || ''))}&role=${encodeURIComponent(String(currentUser.role || ''))}&userName=${encodeURIComponent(String(currentUser.name || ''))}&_=refreshReports_${Date.now()}`;
+                    const reportUrl = `${SCRIPT_URL}?action=getReports&userId=${encodeURIComponent(String(currentUser.id || ''))}&authToken=${encodeURIComponent(getAuthToken())}&_=refreshReports_${Date.now()}`;
                     const reportsResponse = await fetch(reportUrl, { cache: 'no-store' });
                     if (reportsResponse.ok) {
                         const freshReports = await reportsResponse.json();
@@ -401,7 +410,8 @@ async function addLocationToSheet(type, value, governorate = '', region = '') {
             type,
             value: cleanValue,
             governorate: String(governorate ?? '').trim(),
-            region: String(region ?? '').trim()
+            region: String(region ?? '').trim(),
+            authToken: getAuthToken()
         }
     };
 
@@ -520,8 +530,10 @@ async function handleLoginPage() {
             if (loginResult.status !== 'success') throw new Error('Invalid credentials');
             
             if (rememberMe) {
+                loginResult.user.authToken = loginResult.authToken;
                 localStorage.setItem('currentUser', JSON.stringify(loginResult.user));
             } else {
+                loginResult.user.authToken = loginResult.authToken;
                 sessionStorage.setItem('currentUser', JSON.stringify(loginResult.user));
             }
             
@@ -649,6 +661,7 @@ async function handleReportPage() {
         expenses: Array.from(expensesTableBody.querySelectorAll('tr')).map(r => ({ item: $(r.querySelector('.expense-item')).val(), quantity: r.querySelector('.expense-quantity').value })),
         createdById: loggedUser.id || '',
         createdByName: loggedUser.name || '',
+        authToken: getAuthToken(),
         };
     };
     const saveFormState = () => { if (isFormDirty) { localStorage.setItem(FORM_STATE_KEY, JSON.stringify(getFormState())); } };
@@ -859,19 +872,17 @@ async function handleReportPage() {
     const normalizeBarcode = (value) => String(value ?? '').trim();
 
     const findProductByBarcode = (barcode) => {
-        const code = normalizeBarcode(barcode);
-        if (!code) return null;
-
-        const products = getSaleProducts().filter(
-            p => normalizeBarcode(p.barcode) === code
-        );
-        if (!products.length) return null;
-
-        // إذا كان الباركود موجوداً بأكثر من سجل، استخدم السعر المعتمد
-        // في بيانات Products. وبعد تعديل السعر يتم تحديث جميع سجلات
-        // المادة/الباركود في الشيت ثم إعادة بناء الكاش.
-        const product = products[products.length - 1];
-        return {...product, price: getSaleDisplayPrice(product)};
+        const code=normalizeBarcode(barcode);
+        if(!code) return null;
+        const campaignKey=String(campaignSelect.value||'');
+        const indexKey=campaignKey+'|'+(isDirectSaleEvent()?'direct':'manual');
+        if(!barcodeIndexCache || barcodeIndexCache.key!==indexKey){
+            const map=new Map();
+            getSaleProducts().forEach(p=>{ const b=normalizeBarcode(p.barcode); if(b) map.set(b,p); });
+            barcodeIndexCache={key:indexKey,map};
+        }
+        const product=barcodeIndexCache.map.get(code);
+        return product ? {...product,price:getSaleDisplayPrice(product)} : null;
     };
 
     const findSaleRowByProduct = (productName, approvedPrice) => {
@@ -978,7 +989,7 @@ async function handleReportPage() {
                 headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                 body: JSON.stringify({
                     action: 'updateProductPrice',
-                    payload: { product, price, campaign, barcode }
+                    payload: { product, price, campaign, barcode, authToken: getAuthToken() }
                 }),
                 cache: 'no-store'
             });
@@ -1440,7 +1451,7 @@ async function handleReportPage() {
     $('#governorate').on('change', () => { const s = $('#governorate').val(); populateSelect(regionSelect, [...new Set(DB.locations.filter(l => l.gov === s).map(l => l.region))]); populateSelect(marketSelect, []); });
     $('#region').on('change', () => { const s = $('#region').val(); populateSelect(marketSelect, [...new Set(DB.locations.filter(l => l.region === s).map(l => l.market))]); });
     $('#inventoryDependency').on('change', function() { const s = $(this).val(); let n = ''; if (s) { const m = DB.employees.find(e => e.name === s); if (m && m.mgr) n = m.mgr; } supervisorInput.value = n; });
-    $('#campaign').on('change', function() { salesTableBody.innerHTML = ''; expensesTableBody.innerHTML = ''; if (competitorSalesTableBody) competitorSalesTableBody.innerHTML = ''; updateCompetitorSalesVisibility(); updateSaleTotals(); const bi = document.getElementById('barcodeInput'); if (bi) bi.value = ''; const bs = document.getElementById('barcodeStatus'); if (bs) bs.textContent = ''; focusBarcodeInput(); });
+    $('#campaign').on('change', function() { barcodeIndexCache=null; salesTableBody.innerHTML = ''; expensesTableBody.innerHTML = ''; if (competitorSalesTableBody) competitorSalesTableBody.innerHTML = ''; updateCompetitorSalesVisibility(); updateSaleTotals(); const bi = document.getElementById('barcodeInput'); if (bi) bi.value = ''; const bs = document.getElementById('barcodeStatus'); if (bs) bs.textContent = ''; focusBarcodeInput(); });
     
     // const updatePhoneNumberRequirement = () => {
     //     const eventValue = String($('#event').val() || '').trim();
@@ -1455,6 +1466,7 @@ async function handleReportPage() {
     // };
 
     $('#event').on('change', function() {
+       barcodeIndexCache=null;
        // updatePhoneNumberRequirement();
         updateSalesVisibility();
         updateCompetitorSalesVisibility();
@@ -1490,7 +1502,7 @@ async function handleReportPage() {
             mainContainer.insertAdjacentHTML('afterbegin', `<div class="alert alert-info text-center p-3" id="edit-loading"><i class="fa-solid fa-spinner fa-spin"></i> تحميل بيانات التقرير...</div>`);
             (async () => {
                 try {
-                    const res = await fetch(`${SCRIPT_URL}?action=getReportById&id=${editId}`);
+                    const res = await fetch(`${SCRIPT_URL}?action=getReportById&id=${encodeURIComponent(editId)}&userId=${encodeURIComponent(String(loggedUser.id || ''))}&authToken=${encodeURIComponent(getAuthToken())}`);
                     const result = await res.json();
                     document.getElementById('edit-loading').remove();
                     if (result.status === 'success') {
@@ -1839,11 +1851,38 @@ async function handleHistoryPage() {
     const searchInput = document.getElementById('searchInput');
     const noResultsMessage = document.getElementById('no-results-message');
     const reportsCount = document.getElementById('reportsCount');
+    const employeeFilter = document.getElementById('historyEmployeeFilter');
     const currentUser = JSON.parse(localStorage.getItem('currentUser')) || JSON.parse(sessionStorage.getItem('currentUser'));
     let currentReports = [];
     const isAdmin = currentUser && currentUser.role === 'admin';
+    // "مدير" أيضاً يثق بفلترة الخادم (يشمل تقاريره وتقارير فريقه)، فلا نعيد تقييده على معرّفه فقط هنا.
+    const trustsServerFiltering = isAdmin || (currentUser && currentUser.role === 'مدير');
     const historyTitle = document.getElementById('historyTitle');
-    if (historyTitle) historyTitle.textContent = isAdmin ? 'سجل جميع التقارير' : 'سجل تقاريري';
+    if (historyTitle) historyTitle.textContent = isAdmin ? 'سجل جميع التقارير' : (trustsServerFiltering ? 'سجل تقارير فريقي' : 'سجل تقاريري');
+    const employeeNamesForFilter = async () => {
+        if (!employeeFilter || !trustsServerFiltering) return;
+        try {
+            const db = await getDbData();
+            let names = (db.employees || []).map(e => String(e.name || '').trim()).filter(Boolean);
+            if (isManagerUser(currentUser)) {
+                const children = new Map();
+                (db.employees || []).forEach(e => {
+                    const name = String(e.name || '').trim(), mgr = String(e.mgr || '').trim();
+                    if (name && mgr) children.set(mgr, [...(children.get(mgr) || []), name]);
+                });
+                const allowed = new Set(), queue = [String(currentUser.name || '').trim()];
+                while (queue.length) (children.get(queue.shift()) || []).forEach(n => { if (!allowed.has(n)) { allowed.add(n); queue.push(n); } });
+                names = names.filter(n => allowed.has(n));
+            }
+            employeeFilter.innerHTML = '<option value="">كل الموظفين</option>' + names.sort((a,b) => a.localeCompare(b, 'ar')).map(n => `<option value="${escapeHtmlHistory(n)}">${escapeHtmlHistory(n)}</option>`).join('');
+            employeeFilter.style.display = '';
+        } catch (e) { console.warn('Employee filter unavailable:', e); }
+    };
+    const escapeHtmlHistory = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+    const filterByEmployee = reports => {
+        const name = employeeFilter?.value || '';
+        return name ? reports.filter(r => String(r.reportOwnerName || r.createdByName || '').trim() === name) : reports;
+    };
 
     const renderReports = (reportsToRender) => {
         reportsAccordion.innerHTML = '';
@@ -1896,7 +1935,7 @@ async function handleHistoryPage() {
     const cachedReportsJSON = memoryReportsCache ? null : localStorage.getItem('reportsCache');
     if (memoryReportsCache) {
         const allCachedReports = memoryReportsCache;
-        currentReports = currentUser.role === 'admin' ? allCachedReports : allCachedReports.filter(r => {
+        currentReports = trustsServerFiltering ? allCachedReports : allCachedReports.filter(r => {
             const ownerId = String(r.createdById || '').trim();
             const ownerName = String(r.createdByName || '').trim();
             return (ownerId && ownerId === String(currentUser.id || '').trim()) || (!ownerId && ownerName && ownerName === String(currentUser.name || '').trim());
@@ -1906,7 +1945,7 @@ async function handleHistoryPage() {
         try {
             const allCachedReports = JSON.parse(cachedReportsJSON);
             if (Array.isArray(allCachedReports)) {
-                currentReports = currentUser.role === 'admin' ? allCachedReports : allCachedReports.filter(r => {
+                currentReports = trustsServerFiltering ? allCachedReports : allCachedReports.filter(r => {
                     const ownerId = String(r.createdById || '').trim();
                     const ownerName = String(r.createdByName || '').trim();
                     return (ownerId && ownerId === String(currentUser.id || '').trim()) || (!ownerId && ownerName && ownerName === String(currentUser.name || '').trim());
@@ -1928,14 +1967,16 @@ async function handleHistoryPage() {
         const value = e.target.value;
         searchDebounceTimer = setTimeout(() => {
             const term = value.toLowerCase().trim();
-            if (!term) { renderReports(currentReports); return; }
-            const filtered = currentReports.filter(r => {
+            if (!term) { renderReports(filterByEmployee(currentReports)); return; }
+            const filtered = filterByEmployee(currentReports).filter(r => {
                 const haystack = r.__searchText || (r.__searchText = `${r.campaign||''} ${r.market||''} ${r.date||''} ${r.supervisor||''}`.toLowerCase());
                 return haystack.includes(term);
             });
             renderReports(filtered);
         }, 150);
     });
+    employeeFilter?.addEventListener('change', () => renderReports(filterByEmployee(currentReports)));
+    await employeeNamesForFilter();
 
     try {
         const params = new URLSearchParams({
@@ -1943,6 +1984,7 @@ async function handleHistoryPage() {
             userId: String(currentUser.id || ''),
             role: String(currentUser.role || ''),
             userName: String(currentUser.name || ''),
+            authToken: getAuthToken(),
             _: String(Date.now())
         });
         const res = await fetch(`${SCRIPT_URL}?${params.toString()}`, { cache: 'no-store' });
@@ -1953,7 +1995,7 @@ async function handleHistoryPage() {
         memoryReportsCache = allFreshReports;
         localStorage.setItem('reportsCache', freshReportsJSON);
         // الخادم يعيد تقارير المستخدم عند الطلب، ونُبقي الفلترة هنا أيضاً كطبقة حماية للواجهة.
-        currentReports = currentUser.role === 'admin' ? allFreshReports : allFreshReports.filter(r => {
+        currentReports = trustsServerFiltering ? allFreshReports : allFreshReports.filter(r => {
             const ownerId = String(r.createdById || '').trim();
             const ownerName = String(r.createdByName || '').trim();
             return (ownerId && ownerId === String(currentUser.id || '').trim()) || (!ownerId && ownerName && ownerName === String(currentUser.name || '').trim());
@@ -1993,6 +2035,9 @@ async function handleMaterialsMovementPage() {
     const saveMovementBtn = document.getElementById('saveMovementBtn');
     const movementHistoryBody = document.getElementById('movement-history-body');
     const inventorySummaryBody = document.getElementById('inventory-summary-body');
+    const movementEmployeeFilter = document.getElementById('movementEmployeeFilter');
+    const movementEmployeeFilterWrap = document.getElementById('movementEmployeeFilterWrap');
+    let selectedMovementEmployee = '';
 
     const productModal = new bootstrap.Modal(document.getElementById('movementProductSelectionModal'));
     const productSearchInput = document.getElementById('movementProductSearchInput');
@@ -2000,6 +2045,29 @@ async function handleMaterialsMovementPage() {
     const addSelectedProductsBtn = document.getElementById('addSelectedMovementProductsBtn');
 
     let DB = null;
+
+    function setupMovementEmployeeFilter() {
+        if (!movementEmployeeFilter || (!isAdminUser(currentUser) && !isManagerUser(currentUser))) return;
+        let names = (DB?.employees || []).map(e => String(e.name || '').trim()).filter(Boolean);
+        if (isManagerUser(currentUser)) {
+            const children = new Map();
+            (DB?.employees || []).forEach(e => {
+                const name = String(e.name || '').trim(), mgr = String(e.mgr || '').trim();
+                if (name && mgr) children.set(mgr, [...(children.get(mgr) || []), name]);
+            });
+            const allowed = new Set(), queue = [String(currentUser.name || '').trim()];
+            while (queue.length) (children.get(queue.shift()) || []).forEach(n => { if (!allowed.has(n)) { allowed.add(n); queue.push(n); } });
+            names = names.filter(n => allowed.has(n));
+        }
+        movementEmployeeFilter.innerHTML = '';
+        movementEmployeeFilter.add(new Option('كل الموظفين', ''));
+        names.sort((a,b) => a.localeCompare(b, 'ar')).forEach(n => movementEmployeeFilter.add(new Option(n, n)));
+        movementEmployeeFilterWrap.style.display = '';
+        movementEmployeeFilter.addEventListener('change', () => {
+            selectedMovementEmployee = movementEmployeeFilter.value;
+            refreshMovementsAndSummary();
+        });
+    }
 
     const isCancelledProduct = (product) => {
         if (!product) return true;
@@ -2020,7 +2088,13 @@ async function handleMaterialsMovementPage() {
     }
 
     userInfoBox.classList.remove('d-none');
-    userInfoBox.innerHTML = `<i class="fa-solid fa-user me-1"></i> محصلة السحب/المرتجع الخاصة بك: <strong>${currentUser.name || ''}</strong>`;
+    (function renderScopeInfo() {
+        const role = String(currentUser.role || '').trim();
+        let label = 'محصلة السحب/المرتجع الخاصة بك';
+        if (role === 'admin') label = 'صلاحية كاملة: تعرض محصلة كل المستخدمين';
+        else if (role === 'مدير') label = 'صلاحية مدير: تعرض محصلتك ومحصلة كل من يتبع لك';
+        userInfoBox.innerHTML = `<i class="fa-solid fa-user me-1"></i> ${label}: <strong>${currentUser.name || ''}</strong>`;
+    })();
 
     // -----------------------------------------------------------------
     // إضافة صف حركة جديد (مادة + كمية + عملية)
@@ -2113,7 +2187,8 @@ async function handleMaterialsMovementPage() {
                     payload: {
                         items,
                         createdById: String(currentUser.id || ''),
-                        createdByName: String(currentUser.name || '')
+                        createdByName: String(currentUser.name || ''),
+                        authToken: getAuthToken()
                     }
                 })
             });
@@ -2141,18 +2216,29 @@ async function handleMaterialsMovementPage() {
         return `<span class="badge bg-secondary">${operation}</span>`;
     }
 
+    window.addEventListener('dbCacheRefreshed', () => { refreshMovementsAndSummary(); });
+
     async function refreshMovementsAndSummary() {
         movementHistoryBody.innerHTML = `<tr><td colspan="7" class="text-center text-muted"><i class="fa-solid fa-spinner fa-spin me-1"></i> جاري التحميل...</td></tr>`;
-        inventorySummaryBody.innerHTML = `<tr><td colspan="6" class="text-center text-muted"><i class="fa-solid fa-spinner fa-spin me-1"></i> جاري التحميل...</td></tr>`;
+        inventorySummaryBody.innerHTML = `<tr><td colspan="7" class="text-center text-muted"><i class="fa-solid fa-spinner fa-spin me-1"></i> جاري التحميل...</td></tr>`;
         try {
-            const res = await fetch(`${SCRIPT_URL}?action=getUserFestivalMovements&userId=${encodeURIComponent(currentUser.id || '')}&_=${Date.now()}`, { cache: 'no-store' });
+            const params = new URLSearchParams({
+                action: 'getUserFestivalMovements',
+                userId: String(currentUser.id || ''),
+                role: String(currentUser.role || ''),
+                userName: String(currentUser.name || ''),
+                authToken: getAuthToken(),
+                _: String(Date.now())
+            });
+            const res = await fetch(`${SCRIPT_URL}?${params.toString()}`, { cache: 'no-store' });
             const result = await res.json();
             if (!result || result.status !== 'success') throw new Error(result?.message || 'تعذر تحميل الحركات');
-            const movements = Array.isArray(result.movements) ? result.movements : [];
+            const movements = (Array.isArray(result.movements) ? result.movements : [])
+                .filter(m => !selectedMovementEmployee || String(m.createdByName || '').trim() === selectedMovementEmployee);
 
             if (!movements.length) {
                 movementHistoryBody.innerHTML = `<tr><td colspan="7" class="text-center text-muted">لا توجد حركات مسجلة بعد</td></tr>`;
-                inventorySummaryBody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">لا توجد بيانات بعد</td></tr>`;
+                inventorySummaryBody.innerHTML = `<tr><td colspan="7" class="text-center text-muted">لا توجد بيانات بعد</td></tr>`;
                 return;
             }
 
@@ -2160,10 +2246,13 @@ async function handleMaterialsMovementPage() {
                 `<tr><td>${m.item}</td><td>${m.quantity}</td><td>${m.invoiceNumber ? m.invoiceNumber : '-'}</td><td>${operationBadge(m.operation)}</td><td>${m.date}</td><td>${m.reportId ? m.reportId : '-'}</td><td>${m.createdByName || '-'}</td></tr>`
             ).join('');
 
+            // التجميع بحسب (الموظف + المادة) معاً، حتى لا تختلط محصلة موظف بآخر عند عرض المدير/الأدمن لفريقه.
             const summaryMap = new Map();
             movements.forEach(m => {
-                if (!summaryMap.has(m.item)) summaryMap.set(m.item, { item: m.item, withdrawn: 0, returned: 0, expensed: 0, sold: 0 });
-                const entry = summaryMap.get(m.item);
+                const employee = m.createdByName || '-';
+                const key = employee + '||' + m.item;
+                if (!summaryMap.has(key)) summaryMap.set(key, { employee, item: m.item, withdrawn: 0, returned: 0, expensed: 0, sold: 0 });
+                const entry = summaryMap.get(key);
                 const qty = Number(m.quantity) || 0;
                 if (m.operation === 'سحب') entry.withdrawn += qty;
                 else if (m.operation === 'مرتجع') entry.returned += qty;
@@ -2171,13 +2260,16 @@ async function handleMaterialsMovementPage() {
                 else if (m.operation === 'مبيعات') entry.sold += qty;
             });
 
-            const summary = Array.from(summaryMap.values()).map(e => ({ ...e, remaining: e.withdrawn - e.returned - e.expensed - e.sold }));
+            const summary = Array.from(summaryMap.values())
+                .map(e => ({ ...e, remaining: e.withdrawn - e.returned - e.expensed - e.sold }))
+                .sort((a, b) => a.employee.localeCompare(b.employee, 'ar') || a.item.localeCompare(b.item, 'ar'));
+
             inventorySummaryBody.innerHTML = summary.map(e =>
-                `<tr><td>${e.item}</td><td>${e.withdrawn}</td><td>${e.returned}</td><td>${e.expensed}</td><td>${e.sold}</td><td class="fw-bold ${e.remaining < 0 ? 'text-danger' : ''}">${e.remaining}</td></tr>`
+                `<tr><td>${e.employee}</td><td>${e.item}</td><td>${e.withdrawn}</td><td>${e.returned}</td><td>${e.expensed}</td><td>${e.sold}</td><td class="fw-bold ${e.remaining < 0 ? 'text-danger' : ''}">${e.remaining}</td></tr>`
             ).join('');
         } catch (e) {
             movementHistoryBody.innerHTML = `<tr><td colspan="7" class="text-center text-danger">تعذر تحميل السجل: ${e.message || ''}</td></tr>`;
-            inventorySummaryBody.innerHTML = `<tr><td colspan="6" class="text-center text-danger">تعذر تحميل المحصلة</td></tr>`;
+            inventorySummaryBody.innerHTML = `<tr><td colspan="7" class="text-center text-danger">تعذر تحميل المحصلة</td></tr>`;
         }
     }
 
@@ -2225,12 +2317,27 @@ async function handleMaterialsMovementPage() {
             userId: String(currentUser.id || ''),
             role: String(currentUser.role || ''),
             userName: String(currentUser.name || ''),
+            authToken: getAuthToken(),
             _: String(Date.now())
         });
-        const res = await fetch(`${SCRIPT_URL}?${params.toString()}`, { cache: 'no-store' });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const result = await res.json();
-        if (!Array.isArray(result)) throw new Error(result?.message || 'تعذر تحميل التقارير');
+        let result;
+        if (Array.isArray(memoryReportsCache)) {
+            result=memoryReportsCache;
+        } else {
+            if(reportsRequestInFlight) result=await reportsRequestInFlight;
+            else {
+                reportsRequestInFlight=(async()=>{
+                    const res=await fetch(`${SCRIPT_URL}?${params.toString()}`,{cache:'no-store'});
+                    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+                    const data=await res.json();
+                    if(!Array.isArray(data)) throw new Error(data?.message||'تعذر تحميل التقارير');
+                    memoryReportsCache=data; localStorage.setItem('reportsCache',JSON.stringify(data));
+                    return data;
+                })();
+                try { result=await reportsRequestInFlight; } finally { reportsRequestInFlight=null; }
+            }
+        }
+        if (!Array.isArray(result)) throw new Error('تعذر تحميل التقارير');
         salesReportCandidates = result.slice().sort((a,b) => String(b.date || b.createdAt || '').localeCompare(String(a.date || a.createdAt || '')));
         renderSalesReportCandidates();
     }
@@ -2270,7 +2377,8 @@ async function handleMaterialsMovementPage() {
                     payload: {
                         createdById: String(currentUser.id || ''),
                         createdByName: String(currentUser.name || ''),
-                        reportId: selectedReportId
+                        reportId: selectedReportId,
+                        authToken: getAuthToken()
                     }
                 })
             });
@@ -2293,6 +2401,7 @@ async function handleMaterialsMovementPage() {
     // -----------------------------------------------------------------
     try {
         DB = await getDbData();
+        setupMovementEmployeeFilter();
     } catch (e) {
         DB = { products: {} };
     }

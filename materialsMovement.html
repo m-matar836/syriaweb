@@ -62,11 +62,18 @@
             </div>
             <div class="card-body">
                 <div class="alert alert-info py-2 mb-0">
-                    كل ما تسجّله هنا مرتبط بحسابك أنت: كل مستخدم يرى فقط سحبه ومرتجعه ومحصلة المواد الباقية معه.
-                    عند حفظ أي تقرير يحتوي على مصاريف، تُطرح كميات المصاريف تلقائياً
-                    من محصلتك (تظهر في السجل كحركة "صرف (تلقائي)"). أما إرسال صافي المحصلة إلى المبيعات يتم <strong>يدوياً</strong>: عند الضغط على الزر تختار التقرير الذي ستضاف إليه هذه المبيعات.
+                    كل مستخدم يرى سحبه ومرتجعه ومحصلته الخاصة. <strong>حسابات المدير</strong> ترى تلقائياً تقارير
+                    ومحصلة كل الموظفين الذين يتبعون له (حسب شجرة "المسؤول المباشر" في ورقة Employees)، بالإضافة
+                    إلى بياناته الشخصية. أما زر "إرسال صافي المحصلة إلى المبيعات" فيُصفّر محصلتك الشخصية فقط دوماً،
+                    ولا يؤثر على محصلة أي شخص آخر حتى لو كنت تشاهد بيانات فريقك.
+                    عند حفظ أي تقرير يحتوي على مصاريف، تُطرح كميات المصاريف تلقائياً من محصلة صاحب التقرير
+                    (تظهر في السجل كحركة "صرف (تلقائي)").
                 </div>
                 <div id="reportInfoBox" class="alert alert-success mt-3"></div>
+                <div class="mb-3" id="movementEmployeeFilterWrap" style="display:none">
+                    <label for="movementEmployeeFilter" class="form-label">عرض محصلة الموظف</label>
+                    <select id="movementEmployeeFilter" class="form-select"><option value="">كل الموظفين</option></select>
+                </div>
             </div>
         </div><br/>
 
@@ -136,10 +143,10 @@
                     <div class="table-responsive">
                         <table class="table table-bordered mb-0">
                             <thead class="table-light">
-                                <tr><th>المادة</th><th>إجمالي السحب</th><th>إجمالي المرتجع</th><th>إجمالي الصرف (تلقائي من جميع التقارير)</th><th>إجمالي المبيعات المُرسَلة</th><th>المتبقي معي (الصافي)</th></tr>
+                                <tr><th>الموظف</th><th>المادة</th><th>إجمالي السحب</th><th>إجمالي المرتجع</th><th>إجمالي الصرف (تلقائي من جميع التقارير)</th><th>إجمالي المبيعات المُرسَلة</th><th>المتبقي (الصافي)</th></tr>
                             </thead>
                             <tbody id="inventory-summary-body">
-                                <tr><td colspan="6" class="text-center text-muted">لا توجد بيانات بعد</td></tr>
+                                <tr><td colspan="7" class="text-center text-muted">لا توجد بيانات بعد</td></tr>
                             </tbody>
                         </table>
                     </div>
