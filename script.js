@@ -2,28 +2,95 @@
 //   script.js - النسخة النهائية مع إصلاح مشكلة تفريغ الحقول
 // ===================================================================
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzf9oBzFT8q9l8Thk79j94Xe7N1IJy3Ejwj9y3UZFOxsEwMvKxDhg2uLmRveWcoQGmf/exec";
+// ===================================================================
+//                     DARK MODE
+// ===================================================================
+function initDarkMode() {
+    const toggle = document.getElementById('darkModeToggle');
+    if (!toggle) return;
+    const saved = localStorage.getItem('theme');
+    if (saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+    }
+    toggle.addEventListener('click', () => {
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        document.documentElement.setAttribute('data-theme', isDark ? 'light' : 'dark');
+        localStorage.setItem('theme', isDark ? 'light' : 'dark');
+    });
+}
+
+// ===================================================================
+//                     SESSION TIMEOUT
+// ===================================================================
+const SESSION_TIMEOUT_MS = 8 * 60 * 60 * 1000;
+const SESSION_WARNING_MS = 10 * 60 * 1000;
+let sessionTimer = null;
+let sessionWarningTimer = null;
+
+function startSessionTimeout() {
+    const userRaw = localStorage.getItem('currentUser') || sessionStorage.getItem('currentUser');
+    if (!userRaw) return;
+    const loginTime = Number(localStorage.getItem('loginTimestamp') || sessionStorage.getItem('loginTimestamp'));
+    if (!loginTime) {
+        const now = Date.now();
+        if (localStorage.getItem('currentUser')) localStorage.setItem('loginTimestamp', now);
+        else sessionStorage.setItem('loginTimestamp', now);
+        startSessionTimeout();
+        return;
+    }
+    const elapsed = Date.now() - loginTime;
+    const remaining = SESSION_TIMEOUT_MS - elapsed;
+    if (remaining <= 0) { forceLogout('انتهت صلاحية الجلسة. يرجى تسجيل الدخول مرة أخرى.'); return; }
+    const warningAt = remaining - SESSION_WARNING_MS;
+    if (warningAt > 0) {
+        sessionWarningTimer = setTimeout(() => showSessionWarning(SESSION_WARNING_MS), warningAt);
+    } else if (remaining > 0) {
+        showSessionWarning(remaining);
+    }
+    sessionTimer = setTimeout(() => forceLogout('انتهت صلاحية الجلسة.'), remaining);
+}
+
+function showSessionWarning(durationMs) {
+    const existing = document.querySelector('.session-timeout-banner');
+    if (existing) return;
+    const minutes = Math.ceil(durationMs / 60000);
+    const banner = document.createElement('div');
+    banner.className = 'session-timeout-banner';
+    banner.innerHTML = `<i class="fa-solid fa-clock"></i> ستنتهي جلستك خلال ${minutes} دقيقة. <button id="extendSessionBtn">تمديد الجلسة</button>`;
+    document.body.appendChild(banner);
+    document.getElementById('extendSessionBtn').addEventListener('click', () => {
+        banner.remove();
+        clearTimeout(sessionTimer);
+        clearTimeout(sessionWarningTimer);
+        const now = Date.now();
+        if (localStorage.getItem('currentUser')) localStorage.setItem('loginTimestamp', now);
+        else sessionStorage.setItem('loginTimestamp', now);
+        startSessionTimeout();
+    });
+}
+
+function forceLogout(message) {
+    clearTimeout(sessionTimer);
+    clearTimeout(sessionWarningTimer);
+    localStorage.removeItem('currentUser');
+    sessionStorage.removeItem('currentUser');
+    localStorage.removeItem('loginTimestamp');
+    sessionStorage.removeItem('loginTimestamp');
+    localStorage.removeItem('appDB');
+    localStorage.removeItem('dbCacheTimestamp');
+    localStorage.removeItem(FORM_STATE_KEY);
+    sessionStorage.removeItem(EDIT_STATE_KEY);
+    alert(message);
+    window.location.href = 'index.html';
+}
+
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyuSsEnXYcYqtHyOqPn1GQDo7Jax8tYzeXQ0R8dnE14WCIMdZavSacfqPn-c5WZj8-9/exec";
 const CACHE_DURATION_MINUTES = 1440;
 const FORM_STATE_KEY = 'reportFormLastState'; 
 const EDIT_STATE_KEY = 'reportToEdit';
-const getCurrentUser = () => JSON.parse(localStorage.getItem('currentUser')) || JSON.parse(sessionStorage.getItem('currentUser')) || {};
-const getAuthToken = () => getCurrentUser().authToken || '';
-const isAdminUser = user => String(user?.role || '').trim().toLowerCase() === 'admin';
-const isManagerUser = user => ['manager', 'مدير'].includes(String(user?.role || '').trim().toLowerCase());
-const normalizeEmployeeRole = value => String(value ?? '').trim()
-    .replace(/[\u064B-\u065F\u0670\u06D6-\u06ED]/g, '') // إزالة التشكيل
-    .replace(/[إأآا]/g, 'ا').replace(/ى/g, 'ي').replace(/ؤ/g, 'و').replace(/ئ/g, 'ي')
-    .replace(/ة/g, 'ه').replace(/ـ/g, '')
-    .replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
-const employeeHasRole = (employee, roles) => {
-    const role = normalizeEmployeeRole(employee?.role);
-    return roles.some(item => role === normalizeEmployeeRole(item) || role.includes(normalizeEmployeeRole(item)));
-};
 // V25: in-memory caches eliminate repeated localStorage JSON parsing during the same page session.
 let memoryDbCache = null;
 let memoryReportsCache = null;
-let barcodeIndexCache = null;
-let reportsRequestInFlight = null;
 
 let originalCreatedAt = null; 
 
@@ -31,8 +98,10 @@ let originalCreatedAt = null;
 //                     OFFLINE-FIRST STORAGE
 // ===================================================================
 const OFFLINE_DB_NAME = 'festivalOfflineDB';
-const OFFLINE_DB_VERSION = 2;
+const OFFLINE_DB_VERSION = 4;
 const OFFLINE_QUEUE_STORE = 'pendingReports';
+const OFFLINE_ATTENDANCE_STORE = 'pendingAttendance';
+const OFFLINE_MOVEMENT_STORE = 'pendingMovements';
 
 function openOfflineDB() {
     return new Promise((resolve, reject) => {
@@ -42,6 +111,12 @@ function openOfflineDB() {
             const db = req.result;
             if (!db.objectStoreNames.contains(OFFLINE_QUEUE_STORE)) {
                 db.createObjectStore(OFFLINE_QUEUE_STORE, { keyPath: 'localId' });
+            }
+            if (!db.objectStoreNames.contains(OFFLINE_ATTENDANCE_STORE)) {
+                db.createObjectStore(OFFLINE_ATTENDANCE_STORE, { keyPath: 'localId' });
+            }
+            if (!db.objectStoreNames.contains(OFFLINE_MOVEMENT_STORE)) {
+                db.createObjectStore(OFFLINE_MOVEMENT_STORE, { keyPath: 'localId' });
             }
         };
         req.onsuccess = () => resolve(req.result);
@@ -54,11 +129,11 @@ async function queueReportOffline(reportData) {
     return new Promise((resolve, reject) => {
         const tx = db.transaction(OFFLINE_QUEUE_STORE, 'readwrite');
         tx.objectStore(OFFLINE_QUEUE_STORE).put({
-            localId: String(reportData.id || `offline_${Date.now()}`),
+            localId: `${reportData.id}_${Date.now()}`,
             reportData,
             createdAt: Date.now()
         });
-        tx.oncomplete = () => { db.close(); resolve(); };
+        tx.oncomplete = () => { db.close(); resolve(); registerBackgroundSync(); };
         tx.onerror = () => { db.close(); reject(tx.error); };
     });
 }
@@ -88,21 +163,21 @@ async function syncPendingReports() {
     let pending = [];
     try { pending = await getPendingReports(); } catch (e) { return; }
     let syncedAny = false;
-    for (const item of pending.sort((a,b) => Number(a.createdAt||0)-Number(b.createdAt||0))) {
-        let synced = false;
-        for (let attempt=1; attempt<=3 && !synced; attempt++) {
-            try {
-                const res = await fetch(SCRIPT_URL, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify({action:'submitReport',payload:item.reportData}) });
-                const result = await res.json();
-                if(result.status!=='success') throw new Error(result.message || 'فشل المزامنة');
-                await removePendingReport(item.localId);
-                syncedAny=true; synced=true;
-            } catch(error) {
-                console.warn(`Offline sync attempt ${attempt} failed:`, error);
-                if(attempt<3) await new Promise(r=>setTimeout(r,Math.min(4000,500*Math.pow(2,attempt-1))));
-            }
+    for (const item of pending) {
+        try {
+            const res = await fetch(SCRIPT_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ action: 'submitReport', payload: item.reportData })
+            });
+            const result = await res.json();
+            if (result.status !== 'success') throw new Error(result.message || 'فشل المزامنة');
+            await removePendingReport(item.localId);
+            syncedAny = true;
+        } catch (error) {
+            console.warn('Offline sync stopped:', error);
+            break;
         }
-        if(!synced) break;
     }
     if (syncedAny) {
         // Syncing reports does not require rebuilding master data. Invalidate only
@@ -114,18 +189,132 @@ async function syncPendingReports() {
     updateOfflineStatus();
 }
 
+// ---- Attendance offline queue (same pattern as reports, separate store) ----
+async function queueAttendanceOffline(payload) {
+    const db = await openOfflineDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(OFFLINE_ATTENDANCE_STORE, 'readwrite');
+        tx.objectStore(OFFLINE_ATTENDANCE_STORE).put({
+            localId: `attendance_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            payload,
+            createdAt: Date.now()
+        });
+        tx.oncomplete = () => { db.close(); resolve(); registerBackgroundSync(); };
+        tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+}
+
+async function getPendingAttendance() {
+    const db = await openOfflineDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(OFFLINE_ATTENDANCE_STORE, 'readonly');
+        const req = tx.objectStore(OFFLINE_ATTENDANCE_STORE).getAll();
+        req.onsuccess = () => { db.close(); resolve(req.result || []); };
+        req.onerror = () => { db.close(); reject(req.error); };
+    });
+}
+
+async function removePendingAttendance(localId) {
+    const db = await openOfflineDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(OFFLINE_ATTENDANCE_STORE, 'readwrite');
+        tx.objectStore(OFFLINE_ATTENDANCE_STORE).delete(localId);
+        tx.oncomplete = () => { db.close(); resolve(); };
+        tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+}
+
+async function syncPendingAttendance() {
+    if (!navigator.onLine) return;
+    let pending = [];
+    try { pending = await getPendingAttendance(); } catch (e) { return; }
+    let syncedAny = false;
+    for (const item of pending) {
+        try {
+            const res = await fetch(SCRIPT_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                body: JSON.stringify({ action: 'submitAttendance', payload: item.payload })
+            });
+            const result = await res.json();
+            if (result.status !== 'success') throw new Error(result.message || 'فشل المزامنة');
+            await removePendingAttendance(item.localId);
+            syncedAny = true;
+        } catch (error) {
+            console.warn('Attendance offline sync stopped:', error);
+            break;
+        }
+    }
+    if (syncedAny) {
+        localStorage.removeItem('attendanceCache');
+        window.dispatchEvent(new CustomEvent('attendanceCacheInvalidated'));
+    }
+    updateOfflineStatus();
+}
+
+
+// ---- Materials movement offline queue ----
+async function queueMovementOffline(payload) {
+    const db = await openOfflineDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(OFFLINE_MOVEMENT_STORE, 'readwrite');
+        tx.objectStore(OFFLINE_MOVEMENT_STORE).put({
+            localId: `movement_${Date.now()}_${Math.random().toString(36).slice(2,8)}`,
+            payload, createdAt: Date.now()
+        });
+        tx.oncomplete = () => { db.close(); resolve(); registerBackgroundSync(); };
+        tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+}
+async function getPendingMovements() {
+    const db = await openOfflineDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(OFFLINE_MOVEMENT_STORE, 'readonly');
+        const req = tx.objectStore(OFFLINE_MOVEMENT_STORE).getAll();
+        req.onsuccess = () => { db.close(); resolve(req.result || []); };
+        req.onerror = () => { db.close(); reject(req.error); };
+    });
+}
+async function removePendingMovement(localId) {
+    const db = await openOfflineDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(OFFLINE_MOVEMENT_STORE, 'readwrite');
+        tx.objectStore(OFFLINE_MOVEMENT_STORE).delete(localId);
+        tx.oncomplete = () => { db.close(); resolve(); };
+        tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+}
+async function syncPendingMovements() {
+    if (!navigator.onLine) return;
+    let pending=[]; try { pending=await getPendingMovements(); } catch(e) { return; }
+    let syncedAny=false;
+    for (const item of pending) {
+        try {
+            const res=await fetch(SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'addFestivalMovement',payload:item.payload})});
+            const result=await res.json();
+            if(!result || result.status!=='success') throw new Error(result?.message||'فشل مزامنة الحركة');
+            await removePendingMovement(item.localId); syncedAny=true;
+        } catch(e) { console.warn('Movement offline sync stopped:',e); break; }
+    }
+    if(syncedAny) window.dispatchEvent(new CustomEvent('movementCacheInvalidated'));
+    updateOfflineStatus();
+}
+
 async function updateOfflineStatus() {
     const el = document.getElementById('offline-status');
     if (!el) return;
     let pendingCount = 0;
-    try { pendingCount = (await getPendingReports()).length; } catch (e) {}
+    try {
+        const [reportsPending, attendancePending, movementsPending] = await Promise.all([getPendingReports(), getPendingAttendance(), getPendingMovements()]);
+        pendingCount = reportsPending.length + attendancePending.length + movementsPending.length;
+    } catch (e) {}
     if (!navigator.onLine) {
-        el.textContent = pendingCount ? `🔴 بدون إنترنت — ${pendingCount} تقرير بانتظار المزامنة` : '🔴 بدون إنترنت — العمل محفوظ محلياً';
+        el.textContent = pendingCount ? `🔴 بدون إنترنت — ${pendingCount} عنصر بانتظار المزامنة` : '🔴 بدون إنترنت — العمل محفوظ محلياً';
         el.style.display = 'block';
         el.style.background = '#dc3545';
         el.style.color = '#fff';
     } else if (pendingCount) {
-        el.textContent = `🟠 متصل — ${pendingCount} تقرير بانتظار المزامنة`;
+        el.textContent = `🟠 متصل — ${pendingCount} عنصر بانتظار المزامنة`;
         el.style.display = 'block';
         el.style.background = '#ffc107';
         el.style.color = '#000';
@@ -138,14 +327,29 @@ async function updateOfflineStatus() {
     }
 }
 
-window.addEventListener('online', () => { updateOfflineStatus(); syncPendingReports(); });
+window.addEventListener('online', () => { updateOfflineStatus(); syncPendingReports(); syncPendingAttendance(); syncPendingMovements(); });
 window.addEventListener('offline', updateOfflineStatus);
+navigator.serviceWorker?.addEventListener?.('message', (event) => {
+    if (event.data && event.data.type === 'SYNC_PENDING') {
+        syncPendingReports(); syncPendingAttendance(); syncPendingMovements();
+    }
+});
+// V42: تسجيل مزامنة الخلفية عند وجود عناصر معلقة (يفضّل على الانتظار للـ setInterval).
+async function registerBackgroundSync() {
+    if (!navigator.serviceWorker?.ready || !('SyncManager' in window)) return;
+    try {
+        const reg = await navigator.serviceWorker.ready;
+        await reg.sync.register('sync-pending');
+    } catch (e) { /* SyncManager غير مدعوم — يبقى setInterval هو الاحتياط */ }
+}
 let pendingSyncTimer = null;
 async function runPendingSyncIfNeeded() {
     if (!navigator.onLine) return;
     try {
-        const pending = await getPendingReports();
-        if (pending.length) await syncPendingReports();
+        const [reportsPending, attendancePending, movementsPending] = await Promise.all([getPendingReports(), getPendingAttendance(), getPendingMovements()]);
+        if (reportsPending.length) await syncPendingReports();
+        if (attendancePending.length) await syncPendingAttendance();
+        if (movementsPending.length) await syncPendingMovements();
     } catch (e) {
         console.warn('Pending sync check skipped:', e);
     }
@@ -153,7 +357,7 @@ async function runPendingSyncIfNeeded() {
 pendingSyncTimer = setInterval(runPendingSyncIfNeeded, 300000);
 document.addEventListener('DOMContentLoaded', () => {
     setupCacheRefreshButtons();
-    setTimeout(() => { updateOfflineStatus(); syncPendingReports(); }, 500);
+    setTimeout(() => { updateOfflineStatus(); syncPendingReports(); syncPendingAttendance(); syncPendingMovements(); }, 500);
 });
 
 // ===================================================================
@@ -185,6 +389,8 @@ function loadHtml5QrcodeLibrary() {
 //                      1. التهيئة العامة والتحقق من تسجيل الدخول
 // ===================================================================
 document.addEventListener('DOMContentLoaded', () => {
+    initDarkMode();
+    startSessionTimeout();
     const currentUser = JSON.parse(localStorage.getItem('currentUser')) || JSON.parse(sessionStorage.getItem('currentUser'));
     const isLoginPage = !!document.getElementById('loginForm');
 
@@ -196,6 +402,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const logout = () => {
             localStorage.removeItem('currentUser');
             sessionStorage.removeItem('currentUser');
+            localStorage.removeItem('loginTimestamp');
+            sessionStorage.removeItem('loginTimestamp');
             localStorage.removeItem('appDB');
             localStorage.removeItem('dbCacheTimestamp');
             localStorage.removeItem(FORM_STATE_KEY); 
@@ -207,12 +415,24 @@ document.addEventListener('DOMContentLoaded', () => {
         if (window.location.pathname.includes('reports.html')) document.querySelector('.nav-link-reports').classList.add('active');
         if (window.location.pathname.includes('history.html')) document.querySelector('.nav-link-history').classList.add('active');
         if (window.location.pathname.includes('materialsMovement.html')) document.querySelector('.nav-link-movement')?.classList.add('active');
+        if (window.location.pathname.includes('attendance.html')) document.querySelector('.nav-link-attendance')?.classList.add('active');
+        if (window.location.pathname.includes('dashboard.html')) document.querySelector('.nav-link-dashboard')?.classList.add('active');
+
+        // V42: صفحة التحليلات تظهر فقط للمشرف (admin) والمدير (manager).
+        // المستخدم العادي (user) لا يرى زر التحليلات في القائمة.
+        const allowedAnalyticsRoles = ['admin', 'manager'];
+        const role = String(currentUser?.role || '').trim().toLowerCase();
+        if (!allowedAnalyticsRoles.includes(role)) {
+            document.querySelectorAll('.nav-link-dashboard').forEach(el => { el.closest('.nav-item').style.display = 'none'; });
+        }
     }
 
     if (isLoginPage) handleLoginPage();
     else if (document.getElementById('reportForm')) handleReportPage();
     else if (document.getElementById('reports-accordion')) handleHistoryPage();
     else if (document.getElementById('movement-table-body')) handleMaterialsMovementPage();
+    else if (document.getElementById('attendanceForm')) handleAttendancePage();
+    else if (document.getElementById('dashboard-container')) handleDashboardPage();
 });
 
 // ===================================================================
@@ -230,13 +450,12 @@ async function getDbData() {
         // استخدم الكاش مباشرة إذا كان Offline، حتى لو انتهت مدته.
         if (!navigator.onLine || (cacheTimestamp && ageMinutes < CACHE_DURATION_MINUTES)) {
             memoryDbCache = JSON.parse(cachedDB);
-            barcodeIndexCache = null;
             return memoryDbCache;
         }
     }
 
     try {
-        const res = await fetch(`${SCRIPT_URL}?action=getInitialData&v=${APP_DB_VERSION}&t=${Date.now()}`, {
+        const res = await fetch(`${SCRIPT_URL}?action=getInitialData&v=${APP_DB_VERSION}`, {
             cache: 'no-store'
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -250,7 +469,6 @@ async function getDbData() {
         if (cachedDB) {
             console.warn('Using cached DB because network request failed:', error);
             memoryDbCache = JSON.parse(cachedDB);
-            barcodeIndexCache = null;
             return memoryDbCache;
         }
         throw error;
@@ -260,137 +478,69 @@ async function getDbData() {
 // ===================================================================
 //                 CACHE REFRESH / FAST DATA UPDATE
 // ===================================================================
-const APP_DB_VERSION = 'v33-employee-lists-fix';
+const APP_DB_VERSION = 'v42-super';
 const APP_DB_KEY = `appDB_${APP_DB_VERSION}`;
+// V39: unified browser cache helpers. Data is served instantly from memory/local
+// storage/Service Worker, then refreshed in the background when online.
+const SMART_CACHE_PREFIX = 'festivalSmartCache::';
+function invalidateSmartCaches() {
+    memoryDbCache = null;
+    memoryReportsCache = null;
+    try {
+        Object.keys(localStorage).forEach(k => {
+            if (k.startsWith(SMART_CACHE_PREFIX) || k.startsWith('attendanceCache::') || k === 'attendanceStatusCache') localStorage.removeItem(k);
+        });
+    } catch (e) {}
+    try { caches?.keys?.().then(keys => keys.filter(k => k.includes('festival-app-v4')).forEach(k => caches.delete(k))).catch(()=>{}); } catch(e) {}
+}
+
 const APP_DB_TS_KEY = `dbCacheTimestamp_${APP_DB_VERSION}`;
 
 let cacheRefreshInProgress = false;
 
-async function refreshAppCache({ silent = false, refreshReports = true } = {}) {
+async function refreshAppCache({ silent = false } = {}) {
     if (cacheRefreshInProgress) return { ok: false, busy: true };
-    if (!navigator.onLine) {
-        if (!silent) alert('لا يمكن تحديث البيانات بدون اتصال بالإنترنت.');
-        return { ok: false, offline: true };
-    }
-
+    if (!navigator.onLine) { if (!silent) alert('لا يمكن تحديث البيانات بدون اتصال بالإنترنت.'); return { ok:false, offline:true }; }
     cacheRefreshInProgress = true;
-    const buttons = document.querySelectorAll('[data-refresh-cache]');
-    buttons.forEach(btn => {
-        btn.disabled = true;
-        btn.dataset.originalHtml = btn.innerHTML;
-        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin me-1"></i>جاري التحديث...';
-    });
-
+    const buttons=document.querySelectorAll('[data-refresh-cache]');
+    buttons.forEach(btn=>{btn.disabled=true;btn.dataset.originalHtml=btn.innerHTML;btn.innerHTML='<i class="fa-solid fa-spinner fa-spin me-1"></i>جاري تحديث كل البيانات...';});
     try {
-        // cache: no-store + timestamp ensures Google Apps Script is queried for fresh data.
-        const buildRefreshUrl = () =>
-            `${SCRIPT_URL}?action=getInitialData&forceRefresh=1&v=${encodeURIComponent(APP_DB_VERSION)}&t=${Date.now()}&_=refresh`;
-
-        let response = null;
-        let lastError = null;
-
-        // Try twice because Google Apps Script may transiently redirect/wake the deployment.
-        for (let attempt = 1; attempt <= 2; attempt++) {
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 30000);
-            try {
-                response = await fetch(buildRefreshUrl(), {
-                    method: 'GET',
-                    cache: 'no-store',
-                    redirect: 'follow',
-                    signal: controller.signal
-                });
-                if (response.ok) break;
-                lastError = new Error(`HTTP ${response.status}`);
-            } catch (err) {
-                lastError = err;
-            } finally {
-                clearTimeout(timeout);
-            }
-            if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 800));
+        // Tell the Service Worker to remove stale API/static entries first.
+        if (navigator.serviceWorker?.controller) navigator.serviceWorker.controller.postMessage({type:'CLEAR_APP_CACHE'});
+        const currentUser=JSON.parse(localStorage.getItem('currentUser')||sessionStorage.getItem('currentUser')||'null');
+        const stamp=Date.now();
+        const urls=[
+            `${SCRIPT_URL}?action=getInitialData&forceRefresh=1&v=${encodeURIComponent(APP_DB_VERSION)}&_refresh=${stamp}`
+        ];
+        if(currentUser){
+            const u=encodeURIComponent(String(currentUser.id||'')), r=encodeURIComponent(String(currentUser.role||'')), n=encodeURIComponent(String(currentUser.name||''));
+            urls.push(`${SCRIPT_URL}?action=getReports&userId=${u}&role=${r}&userName=${n}&targetUserId=all&_refresh=${stamp}`);
+            urls.push(`${SCRIPT_URL}?action=getTeamOptions&userId=${u}&role=${r}&userName=${n}&_refresh=${stamp}`);
+            urls.push(`${SCRIPT_URL}?action=getUserFestivalMovements&userId=${u}&role=${r}&targetUserId=${u}&_refresh=${stamp}`);
+            urls.push(`${SCRIPT_URL}?action=getAttendance&userId=${u}&role=${r}&userName=${n}&targetUserId=${u}&_refresh=${stamp}`);
         }
-
-        if (!response || !response.ok) {
-            throw lastError || new Error('تعذر الاتصال بخدمة تحديث البيانات');
-        }
-
-        const freshDB = await response.json();
-        if (!freshDB || freshDB.status === 'error') {
-            throw new Error(freshDB?.message || 'فشل جلب البيانات');
-        }
-
-        // Replace the cache only after a complete successful response.
-        memoryDbCache = freshDB;
-        barcodeIndexCache = null;
-        localStorage.setItem(APP_DB_KEY, JSON.stringify(freshDB));
-        localStorage.setItem(APP_DB_TS_KEY, String(Date.now()));
-
-        // تحديث كاش سجل التقارير أيضاً حتى يكون زر «تحديث البيانات» شاملاً لكل بيانات الموقع.
-        if (refreshReports) {
-            try {
-                const currentUser = JSON.parse(localStorage.getItem('currentUser')) || JSON.parse(sessionStorage.getItem('currentUser'));
-                if (currentUser) {
-                    const reportUrl = `${SCRIPT_URL}?action=getReports&userId=${encodeURIComponent(String(currentUser.id || ''))}&authToken=${encodeURIComponent(getAuthToken())}&_=refreshReports_${Date.now()}`;
-                    const reportsResponse = await fetch(reportUrl, { cache: 'no-store' });
-                    if (reportsResponse.ok) {
-                        const freshReports = await reportsResponse.json();
-                        if (Array.isArray(freshReports)) { memoryReportsCache = freshReports; localStorage.setItem('reportsCache', JSON.stringify(freshReports)); }
-                    }
-                }
-            } catch (reportsError) {
-                console.warn('Reports refresh skipped:', reportsError);
-            }
-        }
-
-        // Tell the current page that fresh data is available.
-        window.dispatchEvent(new CustomEvent('dbCacheRefreshed', { detail: freshDB }));
-
-        // Update the Service Worker itself without deleting the working cache first.
-        // V25: Service Worker update is non-blocking; it must never delay the user-facing refresh.
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.getRegistrations().then(regs => Promise.all(regs.map(reg => reg.update()))).catch(() => {});
-        }
-
-        buttons.forEach(btn => {
-            btn.classList.remove('btn-outline-primary');
-            btn.classList.add('btn-outline-success');
-            btn.innerHTML = '<i class="fa-solid fa-check me-1"></i>تم التحديث';
-        });
-
-        setTimeout(() => {
-            buttons.forEach(btn => {
-                btn.classList.remove('btn-outline-success');
-                btn.classList.add('btn-outline-primary');
-                btn.innerHTML = btn.dataset.originalHtml || '<i class="fa-solid fa-arrows-rotate me-1"></i>تحديث البيانات';
-                btn.disabled = false;
-            });
-        }, 1500);
-
-        return { ok: true, data: freshDB };
-    } catch (error) {
-        console.error('Cache refresh failed:', error);
-        buttons.forEach(btn => {
-            btn.innerHTML = '<i class="fa-solid fa-triangle-exclamation me-1"></i>فشل التحديث';
-        });
-        setTimeout(() => {
-            buttons.forEach(btn => {
-                btn.innerHTML = btn.dataset.originalHtml || '<i class="fa-solid fa-arrows-rotate me-1"></i>تحديث البيانات';
-                btn.disabled = false;
-            });
-        }, 2000);
-
-        if (!silent) {
-            const message = error.name === 'AbortError'
-                ? 'انتهت مهلة الاتصال. تحقق من الإنترنت وحاول مرة أخرى.'
-                : (error instanceof TypeError && /fetch/i.test(error.message || '')
-                    ? 'تعذر الاتصال بخدمة تحديث البيانات. تأكد من نشر آخر نسخة من Google Apps Script ثم حاول مرة أخرى.'
-                    : `تعذر تحديث البيانات: ${error.message || error}`);
-            alert(message);
-        }
-        return { ok: false, error };
-    } finally {
-        cacheRefreshInProgress = false;
-    }
+        urls.push(`${SCRIPT_URL}?action=getStatusOptions&_refresh=${stamp}`);
+        const responses=await Promise.all(urls.map(url=>fetch(url,{cache:'no-store',redirect:'follow'})));
+        const parsed=await Promise.all(responses.map(async r=>{if(!r.ok) throw new Error(`HTTP ${r.status}`); return r.json();}));
+        const freshDB=parsed[0];
+        if(!freshDB || freshDB.status==='error') throw new Error(freshDB?.message||'فشل جلب البيانات الأساسية');
+        memoryDbCache=freshDB; localStorage.setItem(APP_DB_KEY,JSON.stringify(freshDB)); localStorage.setItem(APP_DB_TS_KEY,String(Date.now()));
+        if(currentUser && Array.isArray(parsed[1])){ memoryReportsCache=parsed[1]; localStorage.setItem('reportsCache',JSON.stringify(parsed[1])); }
+        window.dispatchEvent(new CustomEvent('dbCacheRefreshed',{detail:freshDB}));
+        window.dispatchEvent(new CustomEvent('reportsCacheInvalidated'));
+        window.dispatchEvent(new CustomEvent('movementCacheInvalidated'));
+        window.dispatchEvent(new CustomEvent('attendanceCacheInvalidated'));
+        if(navigator.serviceWorker?.getRegistrations) navigator.serviceWorker.getRegistrations().then(regs=>Promise.all(regs.map(reg=>reg.update()))).catch(()=>{});
+        buttons.forEach(btn=>{btn.classList.remove('btn-outline-primary');btn.classList.add('btn-outline-success');btn.innerHTML='<i class="fa-solid fa-check me-1"></i>تم تحديث كل البيانات';});
+        setTimeout(()=>buttons.forEach(btn=>{btn.classList.remove('btn-outline-success');btn.classList.add('btn-outline-primary');btn.innerHTML=btn.dataset.originalHtml||'<i class="fa-solid fa-arrows-rotate me-1"></i>تحديث البيانات';btn.disabled=false;}),1800);
+        return {ok:true,data:freshDB};
+    } catch(error){
+        console.error('Full cache refresh failed:',error);
+        buttons.forEach(btn=>btn.innerHTML='<i class="fa-solid fa-triangle-exclamation me-1"></i>فشل التحديث');
+        setTimeout(()=>buttons.forEach(btn=>{btn.innerHTML=btn.dataset.originalHtml||'<i class="fa-solid fa-arrows-rotate me-1"></i>تحديث البيانات';btn.disabled=false;}),2000);
+        if(!silent) alert(error.name==='AbortError'?'انتهت مهلة الاتصال. حاول مرة أخرى.':`تعذر تحديث كل البيانات: ${error.message||error}`);
+        return {ok:false,error};
+    } finally { cacheRefreshInProgress=false; }
 }
 
 function setupCacheRefreshButtons() {
@@ -402,6 +552,32 @@ function setupCacheRefreshButtons() {
             await refreshAppCache();
         });
     });
+}
+
+// ===================================================================
+//   نظام الصلاحيات على الواجهة: admin (الكل) / manager (فريقه) / user (نفسه)
+// ===================================================================
+// يجلب أسماء الموظفين الذين يحق لصاحب الجلسة الحالية عرض بياناتهم:
+// admin => كل الموظفين، manager => فريقه فقط، user => قائمة فارغة (لا تُعرض القائمة أصلاً).
+async function fetchTeamOptions(currentUser) {
+    const role = String(currentUser?.role || '').trim().toLowerCase();
+    if (role !== 'admin' && role !== 'manager') return [];
+    try {
+        const params = new URLSearchParams({
+            action: 'getTeamOptions',
+            userId: String(currentUser.id || ''),
+            role,
+            _: String(Date.now())
+        });
+        const res = await fetch(`${SCRIPT_URL}?${params.toString()}`, { cache: 'no-store' });
+        if (!res.ok) return [];
+        const result = await res.json();
+        if (!result || result.status !== 'success' || !Array.isArray(result.options)) return [];
+        return result.options;
+    } catch (e) {
+        console.warn('تعذر تحميل قائمة الموظفين:', e);
+        return [];
+    }
 }
 
 
@@ -419,8 +595,7 @@ async function addLocationToSheet(type, value, governorate = '', region = '') {
             type,
             value: cleanValue,
             governorate: String(governorate ?? '').trim(),
-            region: String(region ?? '').trim(),
-            authToken: getAuthToken()
+            region: String(region ?? '').trim()
         }
     };
 
@@ -539,11 +714,11 @@ async function handleLoginPage() {
             if (loginResult.status !== 'success') throw new Error('Invalid credentials');
             
             if (rememberMe) {
-                loginResult.user.authToken = loginResult.authToken;
                 localStorage.setItem('currentUser', JSON.stringify(loginResult.user));
+                localStorage.setItem('loginTimestamp', Date.now());
             } else {
-                loginResult.user.authToken = loginResult.authToken;
                 sessionStorage.setItem('currentUser', JSON.stringify(loginResult.user));
+                sessionStorage.setItem('loginTimestamp', Date.now());
             }
             
             await getDbData();
@@ -578,7 +753,7 @@ async function handleReportPage() {
     const mainContainer = document.querySelector('.main-container');
     const form = document.getElementById('reportForm');
     form.style.display = 'none';
-    mainContainer.insertAdjacentHTML('afterbegin', `<div id="loading-spinner" class="text-center p-5"><i class="fa-solid fa-spinner fa-spin fa-2x"></i><p class="mt-2">جارِ تهيئة النموذج...</p></div>`);
+    mainContainer.insertAdjacentHTML('afterbegin', `<div id="loading-spinner" class="text-center p-5"><div class="mx-auto mb-3" style="width:80%;"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line skeleton-line-medium"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line skeleton-line-short"></div><div class="skeleton skeleton-card"></div></div></div>`);
     let DB = await getDbData();
     if (!DB) {
         const logoutOnClick = "localStorage.clear(); sessionStorage.clear(); window.location.href='index.html'; return false;";
@@ -619,7 +794,6 @@ async function handleReportPage() {
 
             // Re-run dependent product filtering without touching existing rows.
             if (typeof updateProductAvailability === 'function') updateProductAvailability();
-             if (typeof populateEmployees === 'function') populateEmployees();
         } catch (e) {
             console.warn('In-page DB refresh UI update skipped:', e);
         }
@@ -671,7 +845,6 @@ async function handleReportPage() {
         expenses: Array.from(expensesTableBody.querySelectorAll('tr')).map(r => ({ item: $(r.querySelector('.expense-item')).val(), quantity: r.querySelector('.expense-quantity').value })),
         createdById: loggedUser.id || '',
         createdByName: loggedUser.name || '',
-        authToken: getAuthToken(),
         };
     };
     const saveFormState = () => { if (isFormDirty) { localStorage.setItem(FORM_STATE_KEY, JSON.stringify(getFormState())); } };
@@ -767,9 +940,8 @@ async function handleReportPage() {
     };
 
     const populateEmployees = (report = {}) => {
-        const employees = Array.isArray(DB.employees) ? DB.employees : [];
-        const inventoryStaff = employees.filter(e => employeeHasRole(e, ['مسؤول جرد', 'مسؤول الجرد', 'مسؤول جرد مواد', 'جرد', 'inventory'])).map(e => e.name);
-        const coordinators = employees.filter(e => employeeHasRole(e, ['منسق نقطة', 'منسق النقطة', 'منسق', 'coordinator'])).map(e => e.name);
+        const inventoryStaff = DB.employees.filter(e => e.role === 'مسؤول جرد').map(e => e.name);
+        const coordinators = DB.employees.filter(e => e.role === 'منسق نقطة').map(e => e.name);
         populateSelect(document.getElementById('inventoryDependency'), inventoryStaff, report.inventoryDependency);
         populateSelect(document.getElementById('coordinator'), coordinators, report.coordinator);
         const reportPromoters = Array.isArray(report.promoters)
@@ -787,7 +959,7 @@ async function handleReportPage() {
 
     const renderPromotersSelection = () => {
         const promoters = (Array.isArray(DB.employees) ? DB.employees : [])
-            .filter(e => e && employeeHasRole(e, ['مروج', 'مروّج', 'promoter']))
+            .filter(e => e && String(e.role || '').trim() === 'مروج')
             .map(e => String(e.name ?? '').trim())
             .filter(isValidPromoterName)
             .filter((name, index, arr) => arr.indexOf(name) === index);
@@ -883,17 +1055,19 @@ async function handleReportPage() {
     const normalizeBarcode = (value) => String(value ?? '').trim();
 
     const findProductByBarcode = (barcode) => {
-        const code=normalizeBarcode(barcode);
-        if(!code) return null;
-        const campaignKey=String(campaignSelect.value||'');
-        const indexKey=campaignKey+'|'+(isDirectSaleEvent()?'direct':'manual');
-        if(!barcodeIndexCache || barcodeIndexCache.key!==indexKey){
-            const map=new Map();
-            getSaleProducts().forEach(p=>{ const b=normalizeBarcode(p.barcode); if(b) map.set(b,p); });
-            barcodeIndexCache={key:indexKey,map};
-        }
-        const product=barcodeIndexCache.map.get(code);
-        return product ? {...product,price:getSaleDisplayPrice(product)} : null;
+        const code = normalizeBarcode(barcode);
+        if (!code) return null;
+
+        const products = getSaleProducts().filter(
+            p => normalizeBarcode(p.barcode) === code
+        );
+        if (!products.length) return null;
+
+        // إذا كان الباركود موجوداً بأكثر من سجل، استخدم السعر المعتمد
+        // في بيانات Products. وبعد تعديل السعر يتم تحديث جميع سجلات
+        // المادة/الباركود في الشيت ثم إعادة بناء الكاش.
+        const product = products[products.length - 1];
+        return {...product, price: getSaleDisplayPrice(product)};
     };
 
     const findSaleRowByProduct = (productName, approvedPrice) => {
@@ -1000,7 +1174,7 @@ async function handleReportPage() {
                 headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                 body: JSON.stringify({
                     action: 'updateProductPrice',
-                    payload: { product, price, campaign, barcode, authToken: getAuthToken() }
+                    payload: { product, price, campaign, barcode }
                 }),
                 cache: 'no-store'
             });
@@ -1462,7 +1636,7 @@ async function handleReportPage() {
     $('#governorate').on('change', () => { const s = $('#governorate').val(); populateSelect(regionSelect, [...new Set(DB.locations.filter(l => l.gov === s).map(l => l.region))]); populateSelect(marketSelect, []); });
     $('#region').on('change', () => { const s = $('#region').val(); populateSelect(marketSelect, [...new Set(DB.locations.filter(l => l.region === s).map(l => l.market))]); });
     $('#inventoryDependency').on('change', function() { const s = $(this).val(); let n = ''; if (s) { const m = DB.employees.find(e => e.name === s); if (m && m.mgr) n = m.mgr; } supervisorInput.value = n; });
-    $('#campaign').on('change', function() { barcodeIndexCache=null; salesTableBody.innerHTML = ''; expensesTableBody.innerHTML = ''; if (competitorSalesTableBody) competitorSalesTableBody.innerHTML = ''; updateCompetitorSalesVisibility(); updateSaleTotals(); const bi = document.getElementById('barcodeInput'); if (bi) bi.value = ''; const bs = document.getElementById('barcodeStatus'); if (bs) bs.textContent = ''; focusBarcodeInput(); });
+    $('#campaign').on('change', function() { salesTableBody.innerHTML = ''; expensesTableBody.innerHTML = ''; if (competitorSalesTableBody) competitorSalesTableBody.innerHTML = ''; updateCompetitorSalesVisibility(); updateSaleTotals(); const bi = document.getElementById('barcodeInput'); if (bi) bi.value = ''; const bs = document.getElementById('barcodeStatus'); if (bs) bs.textContent = ''; focusBarcodeInput(); });
     
     // const updatePhoneNumberRequirement = () => {
     //     const eventValue = String($('#event').val() || '').trim();
@@ -1477,7 +1651,6 @@ async function handleReportPage() {
     // };
 
     $('#event').on('change', function() {
-       barcodeIndexCache=null;
        // updatePhoneNumberRequirement();
         updateSalesVisibility();
         updateCompetitorSalesVisibility();
@@ -1505,27 +1678,28 @@ async function handleReportPage() {
     if (editId) {
         localStorage.removeItem(FORM_STATE_KEY);
         const reportFromState = JSON.parse(sessionStorage.getItem(EDIT_STATE_KEY));
+        // الحالة المحلية تعرض التقرير فوراً، ثم الخادم يعيد أحدث نسخة دائماً.
         if (reportFromState && reportFromState.id == editId) {
             initEditMode(reportFromState);
             sessionStorage.removeItem(EDIT_STATE_KEY);
-        } else {
-            mainSubmitBtn.disabled = true;
-            mainContainer.insertAdjacentHTML('afterbegin', `<div class="alert alert-info text-center p-3" id="edit-loading"><i class="fa-solid fa-spinner fa-spin"></i> تحميل بيانات التقرير...</div>`);
-            (async () => {
-                try {
-                    const res = await fetch(`${SCRIPT_URL}?action=getReportById&id=${encodeURIComponent(editId)}&userId=${encodeURIComponent(String(loggedUser.id || ''))}&authToken=${encodeURIComponent(getAuthToken())}`);
-                    const result = await res.json();
-                    document.getElementById('edit-loading').remove();
-                    if (result.status === 'success') {
-                        initEditMode(result.report);
-                        mainSubmitBtn.disabled = false;
-                    } else { throw new Error(result.message); }
-                } catch (error) {
-                    alert(`خطأ في تحميل بيانات التعديل: ${error.message}`);
-                    mainContainer.querySelector('#edit-loading')?.remove();
-                }
-            })();
         }
+        mainSubmitBtn.disabled = true;
+        mainContainer.insertAdjacentHTML('afterbegin', `<div class="alert alert-info text-center p-3" id="edit-loading"><i class="fa-solid fa-spinner fa-spin"></i> مزامنة أحدث بيانات التقرير...</div>`);
+        (async () => {
+            try {
+                const res = await fetch(`${SCRIPT_URL}?action=getReportById&id=${encodeURIComponent(editId)}&_refresh=${Date.now()}`, {cache:'no-store'});
+                const result = await res.json();
+                document.getElementById('edit-loading')?.remove();
+                if (result.status === 'success') {
+                    initEditMode(result.report);
+                    mainSubmitBtn.disabled = false;
+                } else throw new Error(result.message);
+            } catch (error) {
+                document.getElementById('edit-loading')?.remove();
+                mainSubmitBtn.disabled = false;
+                if (!reportFromState || reportFromState.id != editId) alert(`خطأ في تحميل بيانات التعديل: ${error.message}`);
+            }
+        })();
     } else {
         loadFormState();
     }
@@ -1862,38 +2036,31 @@ async function handleHistoryPage() {
     const searchInput = document.getElementById('searchInput');
     const noResultsMessage = document.getElementById('no-results-message');
     const reportsCount = document.getElementById('reportsCount');
-    const employeeFilter = document.getElementById('historyEmployeeFilter');
     const currentUser = JSON.parse(localStorage.getItem('currentUser')) || JSON.parse(sessionStorage.getItem('currentUser'));
     let currentReports = [];
-    const isAdmin = currentUser && currentUser.role === 'admin';
-    // "مدير" أيضاً يثق بفلترة الخادم (يشمل تقاريره وتقارير فريقه)، فلا نعيد تقييده على معرّفه فقط هنا.
-    const trustsServerFiltering = isAdmin || (currentUser && currentUser.role === 'مدير');
+    const userRole = String(currentUser?.role || '').trim().toLowerCase();
+    const isAdmin = userRole === 'admin';
+    const isManager = userRole === 'manager';
     const historyTitle = document.getElementById('historyTitle');
-    if (historyTitle) historyTitle.textContent = isAdmin ? 'سجل جميع التقارير' : (trustsServerFiltering ? 'سجل تقارير فريقي' : 'سجل تقاريري');
-    const employeeNamesForFilter = async () => {
-        if (!employeeFilter || !trustsServerFiltering) return;
-        try {
-            const db = await getDbData();
-            let names = (db.employees || []).map(e => String(e.name || '').trim()).filter(Boolean);
-            if (isManagerUser(currentUser)) {
-                const children = new Map();
-                (db.employees || []).forEach(e => {
-                    const name = String(e.name || '').trim(), mgr = String(e.mgr || '').trim();
-                    if (name && mgr) children.set(mgr, [...(children.get(mgr) || []), name]);
-                });
-                const allowed = new Set(), queue = [String(currentUser.name || '').trim()];
-                while (queue.length) (children.get(queue.shift()) || []).forEach(n => { if (!allowed.has(n)) { allowed.add(n); queue.push(n); } });
-                names = names.filter(n => allowed.has(n));
-            }
-            employeeFilter.innerHTML = '<option value="">كل الموظفين</option>' + names.sort((a,b) => a.localeCompare(b, 'ar')).map(n => `<option value="${escapeHtmlHistory(n)}">${escapeHtmlHistory(n)}</option>`).join('');
-            employeeFilter.style.display = '';
-        } catch (e) { console.warn('Employee filter unavailable:', e); }
+    const employeeFilterWrap = document.getElementById('historyEmployeeFilterWrap');
+    const employeeFilterSelect = document.getElementById('historyEmployeeFilterSelect');
+    let selectedTargetId = 'all';
+    let teamOptionsByName = new Map();
+
+    const updateHistoryTitle = () => {
+        if (!historyTitle) return;
+        if (selectedTargetId && selectedTargetId !== 'all') {
+            const name = teamOptionsByName.get(selectedTargetId) || '';
+            historyTitle.textContent = name ? `سجل تقارير: ${name}` : 'سجل التقارير';
+        } else if (isAdmin) {
+            historyTitle.textContent = 'سجل جميع التقارير';
+        } else if (isManager) {
+            historyTitle.textContent = 'سجل تقارير فريقي';
+        } else {
+            historyTitle.textContent = 'سجل تقاريري';
+        }
     };
-    const escapeHtmlHistory = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
-    const filterByEmployee = reports => {
-        const name = employeeFilter?.value || '';
-        return name ? reports.filter(r => String(r.reportOwnerName || r.createdByName || '').trim() === name) : reports;
-    };
+    updateHistoryTitle();
 
     const renderReports = (reportsToRender) => {
         reportsAccordion.innerHTML = '';
@@ -1943,24 +2110,59 @@ async function handleHistoryPage() {
         }
     };
 
+    // جلب تقارير من الخادم — targetId = 'all' (النطاق الافتراضي حسب الصلاحية) أو معرّف موظف محدد.
+    async function fetchReportsFromServer(targetId) {
+        const params = new URLSearchParams({
+            action: 'getReports',
+            userId: String(currentUser.id || ''),
+            role: String(currentUser.role || ''),
+            userName: String(currentUser.name || ''),
+            targetUserId: String(targetId || 'all'),
+            _: String(Date.now())
+        });
+        const res = await fetch(`${SCRIPT_URL}?${params.toString()}`, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!Array.isArray(data)) throw new Error(data?.message || 'استجابة غير صالحة من الخادم');
+        return data;
+    }
+
+    // القائمة المنسدلة لاختيار موظف معيّن — admin يرى الجميع، manager يرى فريقه فقط.
+    if (employeeFilterWrap && employeeFilterSelect) {
+        const options = await fetchTeamOptions(currentUser);
+        if (options.length) {
+            teamOptionsByName = new Map(options.map(o => [String(o.id), o.name]));
+            employeeFilterSelect.innerHTML = '<option value="all">الكل</option>' +
+                options.map(o => `<option value="${o.id}">${o.name}</option>`).join('');
+            employeeFilterWrap.classList.remove('d-none');
+            employeeFilterSelect.addEventListener('change', async () => {
+                selectedTargetId = employeeFilterSelect.value || 'all';
+                updateHistoryTitle();
+                if (selectedTargetId === 'all') {
+                    currentReports = memoryReportsCache || [];
+                    renderReports(currentReports);
+                    return;
+                }
+                reportsAccordion.innerHTML = `<div class="text-center p-4"><i class="fa-solid fa-spinner fa-spin"></i></div>`;
+                try {
+                    currentReports = await fetchReportsFromServer(selectedTargetId);
+                    renderReports(currentReports);
+                } catch (e) {
+                    reportsAccordion.innerHTML = `<div class="alert alert-danger">تعذر تحميل بيانات هذا الموظف.</div>`;
+                }
+            });
+        }
+    }
+
     const cachedReportsJSON = memoryReportsCache ? null : localStorage.getItem('reportsCache');
     if (memoryReportsCache) {
-        const allCachedReports = memoryReportsCache;
-        currentReports = trustsServerFiltering ? allCachedReports : allCachedReports.filter(r => {
-            const ownerId = String(r.createdById || '').trim();
-            const ownerName = String(r.createdByName || '').trim();
-            return (ownerId && ownerId === String(currentUser.id || '').trim()) || (!ownerId && ownerName && ownerName === String(currentUser.name || '').trim());
-        });
+        currentReports = memoryReportsCache;
         renderReports(currentReports);
     } else if (cachedReportsJSON) {
         try {
             const allCachedReports = JSON.parse(cachedReportsJSON);
             if (Array.isArray(allCachedReports)) {
-                currentReports = trustsServerFiltering ? allCachedReports : allCachedReports.filter(r => {
-                    const ownerId = String(r.createdById || '').trim();
-                    const ownerName = String(r.createdByName || '').trim();
-                    return (ownerId && ownerId === String(currentUser.id || '').trim()) || (!ownerId && ownerName && ownerName === String(currentUser.name || '').trim());
-                });
+                currentReports = allCachedReports;
                 renderReports(currentReports);
             }
         } catch (e) {
@@ -1968,7 +2170,7 @@ async function handleHistoryPage() {
         }
     }
     if (!cachedReportsJSON) {
-        reportsAccordion.innerHTML = `<div class="text-center p-5"><i class="fa-solid fa-spinner fa-spin fa-2x"></i><p class="mt-2">جار تحميل السجل لأول مرة...</p></div>`;
+        reportsAccordion.innerHTML = `<div class="p-2"><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div></div>`;
     }
 
     // V27: debounce لتقليل عمليات إعادة الرسم أثناء الكتابة السريعة في قائمة طويلة من التقارير.
@@ -1978,45 +2180,389 @@ async function handleHistoryPage() {
         const value = e.target.value;
         searchDebounceTimer = setTimeout(() => {
             const term = value.toLowerCase().trim();
-            if (!term) { renderReports(filterByEmployee(currentReports)); return; }
-            const filtered = filterByEmployee(currentReports).filter(r => {
+            if (!term) { renderReports(currentReports); return; }
+            const filtered = currentReports.filter(r => {
                 const haystack = r.__searchText || (r.__searchText = `${r.campaign||''} ${r.market||''} ${r.date||''} ${r.supervisor||''}`.toLowerCase());
                 return haystack.includes(term);
             });
             renderReports(filtered);
         }, 150);
     });
-    employeeFilter?.addEventListener('change', () => renderReports(filterByEmployee(currentReports)));
-    await employeeNamesForFilter();
 
     try {
-        const params = new URLSearchParams({
-            action: 'getReports',
-            userId: String(currentUser.id || ''),
-            role: String(currentUser.role || ''),
-            userName: String(currentUser.name || ''),
-            authToken: getAuthToken(),
-            _: String(Date.now())
-        });
-        const res = await fetch(`${SCRIPT_URL}?${params.toString()}`, { cache: 'no-store' });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const allFreshReports = await res.json();
-        if (!Array.isArray(allFreshReports)) throw new Error(allFreshReports?.message || 'استجابة غير صالحة من الخادم');
-        const freshReportsJSON = JSON.stringify(allFreshReports);
+        // النطاق الافتراضي (بدون تحديد موظف) — يحسمه الخادم حسب الدور: admin=الكل، manager=فريقه، user=نفسه.
+        const allFreshReports = await fetchReportsFromServer('all');
         memoryReportsCache = allFreshReports;
-        localStorage.setItem('reportsCache', freshReportsJSON);
-        // الخادم يعيد تقارير المستخدم عند الطلب، ونُبقي الفلترة هنا أيضاً كطبقة حماية للواجهة.
-        currentReports = trustsServerFiltering ? allFreshReports : allFreshReports.filter(r => {
-            const ownerId = String(r.createdById || '').trim();
-            const ownerName = String(r.createdByName || '').trim();
-            return (ownerId && ownerId === String(currentUser.id || '').trim()) || (!ownerId && ownerName && ownerName === String(currentUser.name || '').trim());
-        });
-        renderReports(currentReports);
+        localStorage.setItem('reportsCache', JSON.stringify(allFreshReports));
+        if (selectedTargetId === 'all') {
+            currentReports = allFreshReports;
+            renderReports(currentReports);
+        }
     } catch (error) {
         if (!cachedReportsJSON) {
             reportsAccordion.innerHTML = `<div class="alert alert-danger">فشل تحميل سجل التقارير. يرجى التحقق من الاتصال وبيانات المستخدم ثم تحديث الصفحة.</div>`;
         }
     }
+
+    const exportHistoryBtn = document.getElementById('exportHistoryCSV');
+    exportHistoryBtn?.addEventListener('click', () => {
+        if (!currentReports || !currentReports.length) {
+            noResultsMessage.textContent = 'لا توجد تقارير لتصديرها.';
+            noResultsMessage.classList.remove('d-none');
+            return;
+        }
+        const csv = reportsToCSV(currentReports);
+        downloadTextFile(`reports_${new Date().toISOString().slice(0,10)}.csv`, csv, 'text/csv');
+    });
+}
+
+// ===================================================================
+//   5.5 منطق صفحة التحليلات (dashboard.html) — رسوم بيانية وإحصائيات
+// ===================================================================
+function escapeHtmlGlobal(value) {
+    return String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+    }[char]));
+}
+async function handleDashboardPage() {
+    const currentUser = JSON.parse(localStorage.getItem('currentUser')) || JSON.parse(sessionStorage.getItem('currentUser'));
+    if (!currentUser) { window.location.href = 'index.html'; return; }
+
+    // V42: صلاحية صفحة التحليلات — admin و manager فقط (المدير يرى فريقه، الإداري الكل).
+    // أي مستخدم آخر يُعاد إلى صفحة التقارير حتى لو فتح الرابط مباشرة.
+    const role = String(currentUser.role || '').trim().toLowerCase();
+    if (role !== 'admin' && role !== 'manager') {
+        window.location.href = 'reports.html';
+        return;
+    }
+
+    let db = null;
+    try { db = await getDbData(); } catch (e) { db = { locations: [], products: {}, employees: [] }; }
+
+    const campaignFilter = document.getElementById('dashboardCampaignFilter');
+    const toastContainer = document.getElementById('toast-notification');
+    const showToast = (msg, isError = false) => {
+        const tm = toastContainer?.querySelector('.toast-message');
+        if (!tm) return;
+        tm.textContent = msg;
+        tm.classList.toggle('error', isError);
+        toastContainer.classList.add('show');
+        setTimeout(() => toastContainer.classList.remove('show'), 3000);
+    };
+
+    const campaignNames = new Set();
+    Object.keys(db.products || {}).forEach(c => { if (c) campaignNames.add(c); });
+    db.locations?.forEach(l => { if (l?.gov) campaignNames.add(''); });
+    if (campaignFilter) {
+        campaignFilter.innerHTML = '<option value="">كل الحملات</option>' +
+            [...campaignNames].filter(Boolean).sort().map(c => `<option value="${c}">${c}</option>`).join('');
+    }
+
+    let charts = {};
+    const textColor = () => getComputedStyle(document.documentElement).getPropertyValue('--text-color').trim() || '#333';
+    const gridColor = () => getComputedStyle(document.documentElement).getPropertyValue('--border-color').trim() || '#dfe7f1';
+
+    function destroyCharts() {
+        Object.values(charts).forEach(c => { try { c?.destroy(); } catch (e) {} });
+        charts = {};
+    }
+
+    function loadReports() {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const params = new URLSearchParams({
+                    action: 'getReports',
+                    userId: String(currentUser.id || ''),
+                    role: String(currentUser.role || ''),
+                    userName: String(currentUser.name || ''),
+                    _: String(Date.now())
+                });
+                const res = await fetch(`${SCRIPT_URL}?${params.toString()}`, { cache: 'no-store' });
+                const data = await res.json();
+                resolve(Array.isArray(data) ? data : []);
+            } catch (e) { resolve([]); }
+        });
+    }
+
+    // V42: جلب الإحصائيات المجمّعة من الخادم (أسرع بكثير من جلب كل التقارير وتجميعها محلياً).
+    // مع fallback تلقائي إلى التجميع المحلي إذا فشل استدعاء getDashboardData.
+    async function loadDashboardStats() {
+        if (!navigator.onLine) return null;
+        try {
+            const params = new URLSearchParams({
+                action: 'getDashboardData',
+                userId: String(currentUser.id || ''),
+                role: String(currentUser.role || ''),
+                _: String(Date.now())
+            });
+            const res = await fetch(`${SCRIPT_URL}?${params.toString()}`, { cache: 'no-store' });
+            const data = await res.json();
+            if (data && data.status === 'success' && data.kpis) return data;
+            return null;
+        } catch (e) {
+            console.warn('تعذر جلب بيانات التحليلات المجمعة، سيتم التجميع محلياً:', e);
+            return null;
+        }
+    }
+
+    async function refreshDashboard() {
+        destroyCharts();
+        const campaign = campaignFilter?.value || '';
+        const stats = await loadDashboardStats();
+
+        if (stats && !campaign) {
+            // نستخدم البيانات المجمّعة من الخادم عند عدم وجود فلتر حملة.
+            renderFromServerStats(stats);
+            return;
+        }
+
+        // فلترة حسب الحملة أو fallback: التجميع المحلي.
+        const reports = campaign ? await loadReports() : [];
+        const baseReports = stats && !campaign ? [] : (reports.length ? reports : await loadReports());
+        const filtered = reports.length ? reports.filter(r => String(r.campaign || '') === campaign) : baseReports;
+        renderClientSide(filtered, db);
+    }
+
+    function renderFromServerStats(stats) {
+        const kpis = stats.kpis || {};
+        const kpiReports = document.getElementById('kpiTotalReports');
+        const kpiSales = document.getElementById('kpiTotalSales');
+        const kpiEmployees = document.getElementById('kpiActiveEmployees');
+        const kpiProducts = document.getElementById('kpiTotalProducts');
+        if (kpiReports) kpiReports.textContent = kpis.totalReports || 0;
+        if (kpiSales) kpiSales.textContent = (kpis.totalSales || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        if (kpiEmployees) kpiEmployees.textContent = kpis.activeEmployees || 0;
+        if (kpiProducts) kpiProducts.textContent = Object.values(db.products || {}).flat().length || 0;
+
+        // Daily line
+        const dailyCtx = document.getElementById('chartDailySales');
+        if (dailyCtx && typeof Chart !== 'undefined' && Array.isArray(stats.daily)) {
+            charts.daily = new Chart(dailyCtx.getContext('2d'), {
+                type: 'line',
+                data: {
+                    labels: stats.daily.map(d => String(d.date).slice(5)),
+                    datasets: [{
+                        label: 'المبيعات (بالمليون)',
+                        data: stats.daily.map(d => (d.value || 0) / 1000000),
+                        borderColor: '#4a90e2',
+                        backgroundColor: 'rgba(74,144,226,0.1)',
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 2
+                    }]
+                },
+                options: baseChartOptions('إجمالي المبيعات اليومية بالل.ل', textColor(), gridColor())
+            });
+        }
+
+        // Campaign pie
+        const pieCtx = document.getElementById('chartCampaignPie');
+        if (pieCtx && typeof Chart !== 'undefined' && Array.isArray(stats.campaigns)) {
+            charts.pie = new Chart(pieCtx.getContext('2d'), {
+                type: 'doughnut',
+                data: {
+                    labels: stats.campaigns.map(c => c.label),
+                    datasets: [{
+                        data: stats.campaigns.map(c => c.value),
+                        backgroundColor: ['#4a90e2','#50e3c2','#f39c12','#e74c3c','#9b59b6','#1abc9c','#f1c40f'],
+                        borderWidth: 1
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { color: textColor() } } } }
+            });
+        }
+
+        // Governorate bar
+        const govCtx = document.getElementById('chartGovernorateBar');
+        if (govCtx && typeof Chart !== 'undefined' && Array.isArray(stats.governorates)) {
+            charts.gov = new Chart(govCtx.getContext('2d'), {
+                type: 'bar',
+                data: {
+                    labels: stats.governorates.map(g => g.label),
+                    datasets: [{
+                        label: 'المبيعات بالمليون',
+                        data: stats.governorates.map(g => Math.round((g.value / 1000000) * 100) / 100),
+                        backgroundColor: 'rgba(80,227,194,0.7)',
+                        borderColor: '#50e3c2',
+                        borderWidth: 1
+                    }]
+                },
+                options: baseChartOptions('المبيعات بالمليون الليرة', textColor(), gridColor())
+            });
+        }
+
+        // Employees
+        const body = document.getElementById('employeePerformanceBody');
+        if (body) {
+            const list = Array.isArray(stats.employees) ? stats.employees : [];
+            const totalSales = list.reduce((s, e) => s + (e.sales || 0), 0);
+            body.innerHTML = list.length ? list.map(e => {
+                const pct = totalSales ? Math.round((e.sales / totalSales) * 100) : 0;
+                return `<tr><td><span class="fw-bold">${escapeHtmlGlobal(e.name)}</span></td><td>${e.reports || 0}</td><td>${(e.sales || 0).toLocaleString('en-US', { minimumFractionDigits: 0 })} <span class="badge bg-secondary ms-1">${pct}%</span></td></tr>`;
+            }).join('') : '<tr><td colspan="3" class="text-center text-muted py-4">لا توجد بيانات</td></tr>';
+        }
+    }
+
+    function renderClientSide(reports, db) {
+        const txt = () => getComputedStyle(document.documentElement).getPropertyValue('--text-color').trim() || '#333';
+        const grd = () => getComputedStyle(document.documentElement).getPropertyValue('--border-color').trim() || '#dfe7f1';
+        const filtered = reports || [];
+
+        let totalSales = 0, totalQty = 0;
+        const employeesSet = new Set();
+        filtered.forEach(r => {
+            (r.sales || []).forEach(s => {
+                totalSales += (Number(s.price) || 0) * (Number(s.quantity) || 0);
+                totalQty += Number(s.quantity) || 0;
+            });
+            if (r.createdByName) employeesSet.add(r.createdByName);
+        });
+        const kpiReports = document.getElementById('kpiTotalReports');
+        const kpiSales = document.getElementById('kpiTotalSales');
+        const kpiEmployees = document.getElementById('kpiActiveEmployees');
+        const kpiProducts = document.getElementById('kpiTotalProducts');
+        if (kpiReports) kpiReports.textContent = filtered.length || 0;
+        if (kpiSales) kpiSales.textContent = totalSales.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        if (kpiEmployees) kpiEmployees.textContent = employeesSet.size || 0;
+        if (kpiProducts) kpiProducts.textContent = Object.values(db.products || {}).flat().length || 0;
+
+        const dailyMap = new Map();
+        const today = new Date();
+        for (let i = 29; i >= 0; i--) { const d = new Date(today); d.setDate(d.getDate() - i); dailyMap.set(d.toISOString().slice(0,10), 0); }
+        filtered.forEach(r => { const key = String(r.date || '').slice(0,10); if (dailyMap.has(key)) { let sum=0; (r.sales||[]).forEach(s=>sum+=(Number(s.price)||0)*(Number(s.quantity)||0)); dailyMap.set(key,(dailyMap.get(key)||0)+sum); } });
+
+        const dailyCtx = document.getElementById('chartDailySales');
+        if (dailyCtx && typeof Chart !== 'undefined') {
+            charts.daily = new Chart(dailyCtx.getContext('2d'), {
+                type: 'line',
+                data: { labels: [...dailyMap.keys()].map(k=>k.slice(5)), datasets: [{ label:'المبيعات (بالمليون)', data:[...dailyMap.values()].map(v=>v/1000000), borderColor:'#4a90e2', backgroundColor:'rgba(74,144,226,0.1)', fill:true, tension:0.3, pointRadius:2 }] },
+                options: baseChartOptions('إجمالي المبيعات اليومية بالل.ل', txt(), grd())
+            });
+        }
+
+        const campMap = new Map();
+        filtered.forEach(r => { const c=String(r.campaign||'غير محدد'); let sum=0; (r.sales||[]).forEach(s=>sum+=(Number(s.price)||0)*(Number(s.quantity)||0)); campMap.set(c,(campMap.get(c)||0)+sum); });
+        const pieCtx = document.getElementById('chartCampaignPie');
+        if (pieCtx && typeof Chart !== 'undefined') {
+            const d=[...campMap.entries()];
+            charts.pie = new Chart(pieCtx.getContext('2d'), { type:'doughnut', data:{ labels:d.map(([k])=>k), datasets:[{ data:d.map(([,v])=>v), backgroundColor:['#4a90e2','#50e3c2','#f39c12','#e74c3c','#9b59b6','#1abc9c','#f1c40f'], borderWidth:1 }] }, options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'bottom', labels:{ color:txt() } } } } });
+        }
+
+        const govMap = new Map();
+        filtered.forEach(r => { const g=String(r.governorate||'غير محدد'); let sum=0; (r.sales||[]).forEach(s=>sum+=(Number(s.price)||0)*(Number(s.quantity)||0)); govMap.set(g,(govMap.get(g)||0)+sum); });
+        const govCtx = document.getElementById('chartGovernorateBar');
+        if (govCtx && typeof Chart !== 'undefined') {
+            const d=[...govMap.entries()].sort((a,b)=>b[1]-a[1]).slice(0,10);
+            charts.gov = new Chart(govCtx.getContext('2d'), { type:'bar', data:{ labels:d.map(([k])=>k), datasets:[{ label:'المبيعات', data:d.map(([,v])=>Math.round(v/1000000*100)/100), backgroundColor:'rgba(80,227,194,0.7)', borderColor:'#50e3c2', borderWidth:1 }] }, options: baseChartOptions('المبيعات بالمليون الليرة', txt(), grd()) });
+        }
+
+        renderEmployeePerformance(filtered, db);
+    }
+
+    function employeePerformance(reports) {
+        const map = new Map();
+        let productCount = 0;
+        (reports || []).forEach(r => {
+            const name = String(r.createdByName || 'غير معروف');
+            if (!map.has(name)) map.set(name, { name, reports: 0, sales: 0 });
+            const e = map.get(name);
+            e.reports++;
+            let sum = 0;
+            (r.sales || []).forEach(s => sum += (Number(s.price) || 0) * (Number(s.quantity) || 0));
+            e.sales += sum;
+        });
+        const list = [...map.values()].sort((a,b) => b.sales - a.sales).slice(0, 15);
+        return { list, productCount };
+    }
+
+    function renderEmployeePerformance(reports, db) {
+        const body = document.getElementById('employeePerformanceBody');
+        if (!body) return;
+        const { list } = employeePerformance(reports);
+        const dbProducts = Object.values(db.products || {}).flat().length;
+        if (list.length === 0) {
+            body.innerHTML = '<tr><td colspan="3" class="text-center text-muted py-4">لا توجد بيانات</td></tr>';
+            return;
+        }
+        const totalSales = list.reduce((s, e) => s + e.sales, 0);
+        body.innerHTML = list.map(e => {
+            const pct = totalSales ? Math.round((e.sales / totalSales) * 100) : 0;
+            return `<tr>
+                <td><span class="fw-bold">${escapeHtmlGlobal(e.name)}</span>${dbProducts ? `<span class="text-muted small"> (${dbProducts} مادة)</span>` : ''}</td>
+                <td>${e.reports}</td>
+                <td>${e.sales.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} <span class="badge bg-secondary ms-1">${pct}%</span></td>
+            </tr>`;
+        }).join('');
+    }
+
+    function baseChartOptions(title, textColor, gridColor) {
+        return {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { labels: { color: textColor } },
+                title: { display: !!title, text: title, color: textColor }
+            },
+            scales: {
+                x: { ticks: { color: textColor, maxTicksLimit: 10 }, grid: { color: gridColor } },
+                y: { ticks: { color: textColor }, grid: { color: gridColor } }
+            }
+        };
+    }
+
+    // Re-render charts on theme change for correct colors.
+    const themeObserver = new MutationObserver(() => refreshDashboard());
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+    campaignFilter?.addEventListener('change', refreshDashboard);
+
+    const exportBtn = document.getElementById('exportDashboardCSV');
+    exportBtn?.addEventListener('click', async () => {
+        const reports = await loadReports();
+        const campaign = campaignFilter?.value || '';
+        const filtered = campaign ? reports.filter(r => String(r.campaign || '') === campaign) : reports;
+        const csv = reportsToCSV(filtered);
+        downloadTextFile(`reports_${campaign || 'all'}_${new Date().toISOString().slice(0,10)}.csv`, csv, 'text/csv');
+        showToast('تم تصدير CSV بنجاح.');
+    });
+
+    await refreshDashboard();
+}
+
+function reportsToCSV(reports) {
+    if (!Array.isArray(reports) || !reports.length) return 'لا توجد بيانات';
+    const escapeCsv = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const headers = ['رقم التقرير','التاريخ','الحملة','الحدث','المحافظة','المنطقة','المحل','المشرف','المنسق','تبعية الجرد','عدد الأيام','الوقت من','الوقت إلى','هاتف','المبيعات','الكمية','عدد المبيعات','المصاريف','عدد المصاريف','ملاحظات','أنشئ بواسطة','تاريخ الإنشاء'];
+    const lines = [headers.join(',')];
+    reports.forEach(r => {
+        let salesTotal = 0, salesQty = 0, salesCount = 0;
+        (r.sales || []).forEach(s => {
+            salesTotal += (Number(s.price) || 0) * (Number(s.quantity) || 0);
+            salesQty += Number(s.quantity) || 0;
+            salesCount++;
+        });
+        let expenseTotal = 0, expenseCount = 0;
+        (r.expenses || []).forEach(e => { expenseTotal += Number(e.quantity) || 0; expenseCount++; });
+        lines.push([
+            r.id, r.date, r.campaign, r.event, r.governorate, r.region, r.market,
+            r.supervisor, r.coordinator, r.inventoryDependency, r.eventDays, r.timeFrom, r.timeTo,
+            r.phoneNumber, salesTotal.toFixed(2), salesQty, salesCount,
+            expenseTotal, expenseCount, r.notes, r.createdByName, r.createdAt
+        ].map(escapeCsv).join(','));
+    });
+    return lines.join('\r\n');
+}
+
+function downloadTextFile(filename, content, mimeType) {
+    const blob = new Blob([content], { type: (mimeType || 'text/plain') + ';charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
 }
 
 // ===================================================================
@@ -2026,7 +2572,6 @@ async function handleHistoryPage() {
 // المبيعات تُرسل يدوياً بعد اختيار التقرير المستهدف، بينما المصاريف تُسجّل تلقائياً
 // كحركة "صرف" في festivalMovement عند حفظ أو تعديل أي تقرير.
 const DIRECT_SALE_EVENT_NAME = 'ترويج وبيع مباشر';
-
 async function handleMaterialsMovementPage() {
     const currentUser = JSON.parse(localStorage.getItem('currentUser')) || JSON.parse(sessionStorage.getItem('currentUser'));
     if (!currentUser) { window.location.href = 'index.html'; return; }
@@ -2046,9 +2591,26 @@ async function handleMaterialsMovementPage() {
     const saveMovementBtn = document.getElementById('saveMovementBtn');
     const movementHistoryBody = document.getElementById('movement-history-body');
     const inventorySummaryBody = document.getElementById('inventory-summary-body');
-    const movementEmployeeFilter = document.getElementById('movementEmployeeFilter');
-    const movementEmployeeFilterWrap = document.getElementById('movementEmployeeFilterWrap');
-    let selectedMovementEmployee = '';
+    const movementEntryCard = document.getElementById('movementEntryCard');
+    const closeOutTallyBtnEl = document.getElementById('closeOutTallyBtn');
+    const employeeFilterWrap = document.getElementById('movementEmployeeFilterWrap');
+    const employeeFilterSelect = document.getElementById('movementEmployeeFilterSelect');
+
+    // النطاق المعروض حالياً: نفسي بشكل افتراضي، أو موظف آخر يختاره admin/manager من القائمة.
+    let viewingTargetId = String(currentUser.id || '');
+    let viewingTargetName = String(currentUser.name || '');
+    const isViewingSelf = () => viewingTargetId === String(currentUser.id || '');
+
+    function updateMovementScopeUI() {
+        userInfoBox.classList.remove('d-none');
+        userInfoBox.innerHTML = isViewingSelf()
+            ? `<i class="fa-solid fa-user me-1"></i> محصلة السحب/المرتجع الخاصة بك: <strong>${currentUser.name || ''}</strong>`
+            : `<i class="fa-solid fa-user-group me-1"></i> عرض بيانات الموظف: <strong>${viewingTargetName || ''}</strong> (وضع للعرض فقط)`;
+        // تسجيل حركة جديدة وإرسال صافي المحصلة يبقيان دائماً مرتبطين بحسابك أنت فقط،
+        // لذا يُخفيان عند تصفّح بيانات موظف آخر لتفادي أي التباس.
+        if (movementEntryCard) movementEntryCard.style.display = isViewingSelf() ? '' : 'none';
+        if (closeOutTallyBtnEl) closeOutTallyBtnEl.style.display = isViewingSelf() ? '' : 'none';
+    }
 
     const productModal = new bootstrap.Modal(document.getElementById('movementProductSelectionModal'));
     const productSearchInput = document.getElementById('movementProductSearchInput');
@@ -2056,29 +2618,6 @@ async function handleMaterialsMovementPage() {
     const addSelectedProductsBtn = document.getElementById('addSelectedMovementProductsBtn');
 
     let DB = null;
-
-    function setupMovementEmployeeFilter() {
-        if (!movementEmployeeFilter || (!isAdminUser(currentUser) && !isManagerUser(currentUser))) return;
-        let names = (DB?.employees || []).map(e => String(e.name || '').trim()).filter(Boolean);
-        if (isManagerUser(currentUser)) {
-            const children = new Map();
-            (DB?.employees || []).forEach(e => {
-                const name = String(e.name || '').trim(), mgr = String(e.mgr || '').trim();
-                if (name && mgr) children.set(mgr, [...(children.get(mgr) || []), name]);
-            });
-            const allowed = new Set(), queue = [String(currentUser.name || '').trim()];
-            while (queue.length) (children.get(queue.shift()) || []).forEach(n => { if (!allowed.has(n)) { allowed.add(n); queue.push(n); } });
-            names = names.filter(n => allowed.has(n));
-        }
-        movementEmployeeFilter.innerHTML = '';
-        movementEmployeeFilter.add(new Option('كل الموظفين', ''));
-        names.sort((a,b) => a.localeCompare(b, 'ar')).forEach(n => movementEmployeeFilter.add(new Option(n, n)));
-        movementEmployeeFilterWrap.style.display = '';
-        movementEmployeeFilter.addEventListener('change', () => {
-            selectedMovementEmployee = movementEmployeeFilter.value;
-            refreshMovementsAndSummary();
-        });
-    }
 
     const isCancelledProduct = (product) => {
         if (!product) return true;
@@ -2098,14 +2637,7 @@ async function handleMaterialsMovementPage() {
         return Array.from(map.values());
     }
 
-    userInfoBox.classList.remove('d-none');
-    (function renderScopeInfo() {
-        const role = String(currentUser.role || '').trim();
-        let label = 'محصلة السحب/المرتجع الخاصة بك';
-        if (role === 'admin') label = 'صلاحية كاملة: تعرض محصلة كل المستخدمين';
-        else if (role === 'مدير') label = 'صلاحية مدير: تعرض محصلتك ومحصلة كل من يتبع لك';
-        userInfoBox.innerHTML = `<i class="fa-solid fa-user me-1"></i> ${label}: <strong>${currentUser.name || ''}</strong>`;
-    })();
+    updateMovementScopeUI();
 
     // -----------------------------------------------------------------
     // إضافة صف حركة جديد (مادة + كمية + عملية)
@@ -2190,26 +2722,19 @@ async function handleMaterialsMovementPage() {
         saveMovementBtn.disabled = true;
         saveMovementBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin me-1"></i> جاري الحفظ...';
         try {
-            const res = await fetch(SCRIPT_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                body: JSON.stringify({
-                    action: 'addFestivalMovement',
-                    payload: {
-                        items,
-                        createdById: String(currentUser.id || ''),
-                        createdByName: String(currentUser.name || ''),
-                        authToken: getAuthToken()
-                    }
-                })
-            });
+            const payload = { items, createdById: String(currentUser.id || ''), createdByName: String(currentUser.name || '') };
+            if (!navigator.onLine) { await queueMovementOffline(payload); showToast('تم حفظ الحركة محلياً وستتم مزامنتها عند عودة الإنترنت.'); movementTableBody.innerHTML=''; updateOfflineStatus(); return; }
+            const res = await fetch(SCRIPT_URL, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify({action:'addFestivalMovement',payload}) });
             const result = await res.json();
             if (!result || result.status !== 'success') throw new Error(result?.message || 'فشل حفظ الحركة');
             showToast('تم حفظ الحركة بنجاح.');
             movementTableBody.innerHTML = '';
+            memoryReportsCache = null; localStorage.removeItem('reportsCache'); window.dispatchEvent(new CustomEvent('reportsCacheInvalidated'));
             await refreshMovementsAndSummary();
         } catch (e) {
-            showToast(e.message || 'حدث خطأ أثناء حفظ الحركة', true);
+            if (!navigator.onLine || /failed to fetch|network|load failed/i.test(String(e.message||''))) {
+                try { await queueMovementOffline({items,createdById:String(currentUser.id||''),createdByName:String(currentUser.name||'')}); movementTableBody.innerHTML=''; showToast('تعذر الاتصال — تم حفظ الحركة محلياً للمزامنة تلقائياً.'); updateOfflineStatus(); } catch(qe) { showToast(qe.message||'تعذر الحفظ المحلي',true); }
+            } else showToast(e.message || 'حدث خطأ أثناء حفظ الحركة', true);
         } finally {
             saveMovementBtn.disabled = false;
             saveMovementBtn.innerHTML = '<i class="fa-solid fa-floppy-disk me-1"></i> حفظ الحركة';
@@ -2227,29 +2752,26 @@ async function handleMaterialsMovementPage() {
         return `<span class="badge bg-secondary">${operation}</span>`;
     }
 
-    window.addEventListener('dbCacheRefreshed', () => { refreshMovementsAndSummary(); });
-
-    async function refreshMovementsAndSummary() {
+    async function refreshMovementsAndSummary(targetId) {
+        const scopedUserId = String(targetId || viewingTargetId || currentUser.id || '');
         movementHistoryBody.innerHTML = `<tr><td colspan="7" class="text-center text-muted"><i class="fa-solid fa-spinner fa-spin me-1"></i> جاري التحميل...</td></tr>`;
-        inventorySummaryBody.innerHTML = `<tr><td colspan="7" class="text-center text-muted"><i class="fa-solid fa-spinner fa-spin me-1"></i> جاري التحميل...</td></tr>`;
+        inventorySummaryBody.innerHTML = `<tr><td colspan="6" class="text-center text-muted"><i class="fa-solid fa-spinner fa-spin me-1"></i> جاري التحميل...</td></tr>`;
         try {
             const params = new URLSearchParams({
                 action: 'getUserFestivalMovements',
                 userId: String(currentUser.id || ''),
                 role: String(currentUser.role || ''),
-                userName: String(currentUser.name || ''),
-                authToken: getAuthToken(),
+                targetUserId: scopedUserId,
                 _: String(Date.now())
             });
             const res = await fetch(`${SCRIPT_URL}?${params.toString()}`, { cache: 'no-store' });
             const result = await res.json();
             if (!result || result.status !== 'success') throw new Error(result?.message || 'تعذر تحميل الحركات');
-            const movements = (Array.isArray(result.movements) ? result.movements : [])
-                .filter(m => !selectedMovementEmployee || String(m.createdByName || '').trim() === selectedMovementEmployee);
+            const movements = Array.isArray(result.movements) ? result.movements : [];
 
             if (!movements.length) {
                 movementHistoryBody.innerHTML = `<tr><td colspan="7" class="text-center text-muted">لا توجد حركات مسجلة بعد</td></tr>`;
-                inventorySummaryBody.innerHTML = `<tr><td colspan="7" class="text-center text-muted">لا توجد بيانات بعد</td></tr>`;
+                inventorySummaryBody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">لا توجد بيانات بعد</td></tr>`;
                 return;
             }
 
@@ -2257,13 +2779,10 @@ async function handleMaterialsMovementPage() {
                 `<tr><td>${m.item}</td><td>${m.quantity}</td><td>${m.invoiceNumber ? m.invoiceNumber : '-'}</td><td>${operationBadge(m.operation)}</td><td>${m.date}</td><td>${m.reportId ? m.reportId : '-'}</td><td>${m.createdByName || '-'}</td></tr>`
             ).join('');
 
-            // التجميع بحسب (الموظف + المادة) معاً، حتى لا تختلط محصلة موظف بآخر عند عرض المدير/الأدمن لفريقه.
             const summaryMap = new Map();
             movements.forEach(m => {
-                const employee = m.createdByName || '-';
-                const key = employee + '||' + m.item;
-                if (!summaryMap.has(key)) summaryMap.set(key, { employee, item: m.item, withdrawn: 0, returned: 0, expensed: 0, sold: 0 });
-                const entry = summaryMap.get(key);
+                if (!summaryMap.has(m.item)) summaryMap.set(m.item, { item: m.item, withdrawn: 0, returned: 0, expensed: 0, sold: 0 });
+                const entry = summaryMap.get(m.item);
                 const qty = Number(m.quantity) || 0;
                 if (m.operation === 'سحب') entry.withdrawn += qty;
                 else if (m.operation === 'مرتجع') entry.returned += qty;
@@ -2271,16 +2790,13 @@ async function handleMaterialsMovementPage() {
                 else if (m.operation === 'مبيعات') entry.sold += qty;
             });
 
-            const summary = Array.from(summaryMap.values())
-                .map(e => ({ ...e, remaining: e.withdrawn - e.returned - e.expensed - e.sold }))
-                .sort((a, b) => a.employee.localeCompare(b.employee, 'ar') || a.item.localeCompare(b.item, 'ar'));
-
+            const summary = Array.from(summaryMap.values()).map(e => ({ ...e, remaining: e.withdrawn - e.returned - e.expensed - e.sold }));
             inventorySummaryBody.innerHTML = summary.map(e =>
-                `<tr><td>${e.employee}</td><td>${e.item}</td><td>${e.withdrawn}</td><td>${e.returned}</td><td>${e.expensed}</td><td>${e.sold}</td><td class="fw-bold ${e.remaining < 0 ? 'text-danger' : ''}">${e.remaining}</td></tr>`
+                `<tr><td>${e.item}</td><td>${e.withdrawn}</td><td>${e.returned}</td><td>${e.expensed}</td><td>${e.sold}</td><td class="fw-bold ${e.remaining < 0 ? 'text-danger' : ''}">${e.remaining}</td></tr>`
             ).join('');
         } catch (e) {
             movementHistoryBody.innerHTML = `<tr><td colspan="7" class="text-center text-danger">تعذر تحميل السجل: ${e.message || ''}</td></tr>`;
-            inventorySummaryBody.innerHTML = `<tr><td colspan="7" class="text-center text-danger">تعذر تحميل المحصلة</td></tr>`;
+            inventorySummaryBody.innerHTML = `<tr><td colspan="6" class="text-center text-danger">تعذر تحميل المحصلة</td></tr>`;
         }
     }
 
@@ -2328,27 +2844,12 @@ async function handleMaterialsMovementPage() {
             userId: String(currentUser.id || ''),
             role: String(currentUser.role || ''),
             userName: String(currentUser.name || ''),
-            authToken: getAuthToken(),
             _: String(Date.now())
         });
-        let result;
-        if (Array.isArray(memoryReportsCache)) {
-            result=memoryReportsCache;
-        } else {
-            if(reportsRequestInFlight) result=await reportsRequestInFlight;
-            else {
-                reportsRequestInFlight=(async()=>{
-                    const res=await fetch(`${SCRIPT_URL}?${params.toString()}`,{cache:'no-store'});
-                    if(!res.ok) throw new Error(`HTTP ${res.status}`);
-                    const data=await res.json();
-                    if(!Array.isArray(data)) throw new Error(data?.message||'تعذر تحميل التقارير');
-                    memoryReportsCache=data; localStorage.setItem('reportsCache',JSON.stringify(data));
-                    return data;
-                })();
-                try { result=await reportsRequestInFlight; } finally { reportsRequestInFlight=null; }
-            }
-        }
-        if (!Array.isArray(result)) throw new Error('تعذر تحميل التقارير');
+        const res = await fetch(`${SCRIPT_URL}?${params.toString()}`, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const result = await res.json();
+        if (!Array.isArray(result)) throw new Error(result?.message || 'تعذر تحميل التقارير');
         salesReportCandidates = result.slice().sort((a,b) => String(b.date || b.createdAt || '').localeCompare(String(a.date || a.createdAt || '')));
         renderSalesReportCandidates();
     }
@@ -2388,8 +2889,7 @@ async function handleMaterialsMovementPage() {
                     payload: {
                         createdById: String(currentUser.id || ''),
                         createdByName: String(currentUser.name || ''),
-                        reportId: selectedReportId,
-                        authToken: getAuthToken()
+                        reportId: selectedReportId
                     }
                 })
             });
@@ -2398,6 +2898,7 @@ async function handleMaterialsMovementPage() {
             salesReportModal.hide();
             if (!result.added) showToast(result.message || 'لا توجد كميات متبقية لإرسالها.', true);
             else showToast(`تم إرسال ${result.added} مادة إلى التقرير ${selectedReportId} وتسجيلها في المبيعات وحركة المهرجان.`);
+            memoryReportsCache = null; localStorage.removeItem('reportsCache'); window.dispatchEvent(new CustomEvent('reportsCacheInvalidated'));
             await refreshMovementsAndSummary();
         } catch (e) {
             showToast(e.message || 'حدث خطأ أثناء إرسال صافي المحصلة', true);
@@ -2408,14 +2909,164 @@ async function handleMaterialsMovementPage() {
     });
 
     // -----------------------------------------------------------------
+    // القائمة المنسدلة لاختيار موظف معيّن — admin يرى الجميع، manager يرى فريقه فقط.
+    // -----------------------------------------------------------------
+    if (employeeFilterWrap && employeeFilterSelect) {
+        const options = await fetchTeamOptions(currentUser);
+        if (options.length) {
+            employeeFilterSelect.innerHTML = `<option value="${currentUser.id}">أنا (${currentUser.name || ''})</option>` +
+                options.map(o => `<option value="${o.id}">${o.name}</option>`).join('');
+            employeeFilterWrap.classList.remove('d-none');
+            employeeFilterSelect.addEventListener('change', async () => {
+                viewingTargetId = employeeFilterSelect.value || String(currentUser.id || '');
+                const selectedOption = employeeFilterSelect.options[employeeFilterSelect.selectedIndex];
+                viewingTargetName = isViewingSelf() ? currentUser.name : (selectedOption ? selectedOption.textContent : '');
+                updateMovementScopeUI();
+                await refreshMovementsAndSummary(viewingTargetId);
+            });
+        }
+    }
+
+    // -----------------------------------------------------------------
     // التهيئة الأولية — تظهر الحركة والمحصلة دائماً فور دخول المستخدم للصفحة
     // -----------------------------------------------------------------
     try {
         DB = await getDbData();
-        setupMovementEmployeeFilter();
     } catch (e) {
         DB = { products: {} };
     }
 
-    await refreshMovementsAndSummary();
+    await refreshMovementsAndSummary(viewingTargetId);
+}
+
+const ATTENDANCE_SICK_LEAVE_STATUS = 'اجازة مرضية';
+const ATTENDANCE_MEDICAL_FILE_MAX_BYTES = 5 * 1024 * 1024;
+
+function fileToBase64_(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || '').split(',')[1] || '');
+        reader.onerror = () => reject(new Error('تعذرت قراءة ملف التقرير الطبي'));
+        reader.readAsDataURL(file);
+    });
+}
+
+async function handleAttendancePage() {
+    const user = JSON.parse(localStorage.getItem('currentUser')) || JSON.parse(sessionStorage.getItem('currentUser'));
+    const form=document.getElementById('attendanceForm'), body=document.getElementById('attendance-table-body');
+    const role=String(user.role||'').toLowerCase(), statusFilter=document.getElementById('attendanceFilterStatus');
+    const employeeFilter=document.getElementById('attendanceEmployeeFilter'), message=document.getElementById('attendanceStatusMessage');
+    const statusSelect=document.getElementById('attendanceStatus'), medicalWrap=document.getElementById('medicalReportWrap'), medicalFile=document.getElementById('medicalReportFile');
+    let rows=[];
+    const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+    const render=()=>{const filtered=rows.filter(r=>!statusFilter.value||r.status===statusFilter.value);document.getElementById('attendanceCount').textContent=`${filtered.length} سجل`;body.innerHTML=filtered.length?filtered.map(r=>`<tr><td dir="ltr">${esc(r.timestamp)}</td><td>${esc(r.username)}</td><td><span class="badge ${r.status==='بداية دوام'?'bg-success':'bg-secondary'}">${esc(r.status)}</span></td><td>${esc(r.attendanceStatement)}</td><td>${esc(r.notes)||'-'}</td><td>${r.medicalReportUrl?`<a href="${esc(r.medicalReportUrl)}" target="_blank" rel="noopener" class="btn btn-sm btn-outline-primary"><i class="fa-solid fa-file-medical me-1"></i>عرض</a>`:'-'}</td></tr>`).join(''):'<tr><td colspan="6" class="text-center text-muted py-4">لا توجد سجلات مطابقة</td></tr>';};
+
+    // ---- Smart cache-first loading (instant render from localStorage, refresh
+    // in the background, and keep showing the cached list if offline/failed). ----
+    const attendanceCacheKey=()=>`attendanceCache::${employeeFilter?.value||'all'}`;
+    const readAttendanceCache=()=>{try{const raw=localStorage.getItem(attendanceCacheKey());if(!raw)return null;const parsed=JSON.parse(raw);return Array.isArray(parsed)?parsed:null;}catch(e){return null;}};
+    const writeAttendanceCache=(data)=>{try{localStorage.setItem(attendanceCacheKey(),JSON.stringify(data));}catch(e){/* تجاهل امتلاء التخزين المحلي */}};
+    const load=async()=>{
+        const cached=readAttendanceCache();
+        if(cached){rows=cached;render();} else {body.innerHTML='<tr><td colspan="6" class="text-center py-4">جار التحميل...</td></tr>';}
+        try{
+            const q=new URLSearchParams({action:'getAttendance',userId:String(user.id||''),role:String(user.role||''),userName:String(user.username||user.name||''),targetUserId:employeeFilter?.value||''});
+            const r=await(await fetch(`${SCRIPT_URL}?${q}`,{cache:'no-store'})).json();
+            if(!Array.isArray(r))throw Error(r.message||'تعذر تحميل السجل');
+            rows=r;render();writeAttendanceCache(rows);
+        }catch(e){
+            if(!cached) body.innerHTML=`<tr><td colspan="6" class="text-center text-danger">${esc(e.message)}</td></tr>`;
+            // إذا فيه كاش، منخليه ظاهر كما هو (أوفلاين) بدل ما نستبدله برسالة خطأ.
+        }
+    };
+    window.addEventListener('attendanceCacheInvalidated', load);
+
+    // Status options are pulled live from the "statusWT" sheet (auto-created
+    // with defaults on first run by the backend) so the dropdown (form) and
+    // the history filter always match what's configured there. Cached locally
+    // too, so the dropdown appears instantly and still works offline.
+    const STATUS_CACHE_KEY='attendanceStatusCache';
+    const readStatusCache=()=>{try{const raw=localStorage.getItem(STATUS_CACHE_KEY);const parsed=raw?JSON.parse(raw):null;return Array.isArray(parsed)&&parsed.length?parsed:null;}catch(e){return null;}};
+    const writeStatusCache=(options)=>{try{localStorage.setItem(STATUS_CACHE_KEY,JSON.stringify(options));}catch(e){}};
+    const applyStatusOptions=(options)=>{
+        const currentValue=statusSelect.value;
+        statusSelect.innerHTML=options.map(o=>`<option value="${esc(o)}">${esc(o)}</option>`).join('');
+        if(options.includes(currentValue)) statusSelect.value=currentValue;
+        const currentFilter=statusFilter.value;
+        statusFilter.innerHTML='<option value="">كل الحالات</option>'+options.map(o=>`<option value="${esc(o)}">${esc(o)}</option>`).join('');
+        if(options.includes(currentFilter)) statusFilter.value=currentFilter;
+        toggleMedicalReportField();
+    };
+    const loadStatusOptions=async()=>{
+        const cached=readStatusCache();
+        if(cached) applyStatusOptions(cached);
+        try{
+            const r=await(await fetch(`${SCRIPT_URL}?${new URLSearchParams({action:'getStatusOptions'})}`,{cache:'no-store'})).json();
+            if(r&&r.status==='success'&&Array.isArray(r.options)&&r.options.length){applyStatusOptions(r.options);writeStatusCache(r.options);return;}
+        }catch(e){console.warn('تعذر تحميل حالات الدوام من statusWT (سيتم استخدام القيم المخزنة/الافتراضية)',e);}
+        if(!cached) applyStatusOptions(['بداية دوام','نهاية دوام','عطلة أسبوعية','عطلة رسمية','اجازة إدارية','اجازة مرضية','حضور إضافي']);
+    };
+    const toggleMedicalReportField=()=>{
+        const isSick=statusSelect.value===ATTENDANCE_SICK_LEAVE_STATUS;
+        medicalWrap.classList.toggle('d-none',!isSick);
+        medicalFile.required=isSick;
+        if(!isSick) medicalFile.value='';
+    };
+
+    if(role==='admin'||role==='manager'){try{const options=await fetchTeamOptions(user);employeeFilter.innerHTML='<option value="">كل الموظفين المسموح بهم</option>'+options.map(o=>`<option value="${esc(o.id)}">${esc(o.name)}</option>`).join('');document.getElementById('attendanceEmployeeFilterWrap').classList.remove('d-none');}catch(e){console.warn(e);}}
+    statusFilter.addEventListener('change',render);employeeFilter?.addEventListener('change',load);
+    statusSelect.addEventListener('change',toggleMedicalReportField);
+    await loadStatusOptions();
+
+    form.addEventListener('submit',async e=>{
+        e.preventDefault();
+        const b=form.querySelector('button[type=submit]');
+        b.disabled=true;
+        try{
+            const status=statusSelect.value;
+            const payload={username:user.username||user.name,status,attendanceStatement:document.getElementById('attendanceStatement').value.trim(),notes:document.getElementById('attendanceNotes').value.trim()};
+            if(status===ATTENDANCE_SICK_LEAVE_STATUS){
+                const file=medicalFile.files && medicalFile.files[0];
+                if(!file) throw new Error('يجب إرفاق التقرير الطبي (PDF أو صورة) عند اختيار حالة اجازة مرضية');
+                if(file.size>ATTENDANCE_MEDICAL_FILE_MAX_BYTES) throw new Error('حجم ملف التقرير الطبي يتجاوز 5 ميجابايت');
+                payload.medicalReportBase64=await fileToBase64_(file);
+                payload.medicalReportFileName=file.name;
+                payload.medicalReportMimeType=file.type||'application/octet-stream';
+            }
+
+            const saveOnlineOrQueue=async()=>{
+                if(!navigator.onLine){await queueAttendanceOffline(payload);return{queued:true};}
+                try{
+                    const r=await(await fetch(SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'submitAttendance',payload})})).json();
+                    if(r.status!=='success')throw Error(r.message||'فشل الحفظ');
+                    return r;
+                }catch(err){
+                    const networkFailure=!navigator.onLine||err instanceof TypeError||/failed to fetch|network|load failed/i.test(String(err.message||''));
+                    if(networkFailure){await queueAttendanceOffline(payload);return{queued:true};}
+                    throw err;
+                }
+            };
+
+            const result=await saveOnlineOrQueue();
+            form.reset();
+            toggleMedicalReportField();
+            if(result.queued){
+                updateOfflineStatus();
+                message.className='alert alert-warning mt-3';
+                message.textContent='تم حفظ السجل محلياً وسيتم إرساله تلقائياً عند عودة الإنترنت.';
+            }else{
+                message.className='alert alert-success mt-3';
+                message.textContent='تم تسجيل الدوام بنجاح.';
+                localStorage.removeItem(attendanceCacheKey());
+                await load();
+            }
+        }catch(err){
+            message.className='alert alert-danger mt-3';
+            message.textContent=err.message;
+        }finally{
+            b.disabled=false;
+            b.innerHTML='<i class="fa-solid fa-check me-1"></i> تسجيل الدوام';
+        }
+    });
+    await load();
 }

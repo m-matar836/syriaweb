@@ -42,10 +42,16 @@
                     <li class="nav-item">
                         <a class="nav-link nav-link-movement" href="materialsMovement.html">سحب / مرتجع مواد</a>
                     </li>
+                    <li class="nav-item"><a class="nav-link nav-link-attendance" href="attendance.html">الدوام</a></li>
+                    <li class="nav-item"><a class="nav-link nav-link-dashboard" href="dashboard.html">التحليلات</a></li>
+                    
                 </ul>
                 <div class="d-flex align-items-center me-auto">
                     <button type="button" class="btn btn-sm btn-outline-primary me-2" data-refresh-cache title="جلب أحدث البيانات من Google Sheets">
                         <i class="fa-solid fa-arrows-rotate me-1"></i>تحديث البيانات
+                    </button>
+                    <button type="button" class="dark-mode-toggle me-2" id="darkModeToggle" title="تبديل الوضع الداكن/الفاتح">
+                        <i class="fa-solid fa-moon"></i><i class="fa-solid fa-sun"></i>
                     </button>
                     <span id="welcomeMessage" class="navbar-text me-3"></span>&nbsp;&nbsp; 
                     <button id="logoutBtn" class="btn btn-sm btn-outline-danger"><i class="fa-solid fa-sign-out-alt me-1"></i>تسجيل الخروج</button>
@@ -381,7 +387,8 @@
     <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
     <!-- V27: مكتبة قراءة الباركود بالكاميرا (html5-qrcode) تُحمَّل فقط عند الحاجة الفعلية (زر مسح الكاميرا)
          بدلاً من تحميلها في كل مرة تُفتح فيها صفحة التقارير، لتسريع التحميل الأولي للصفحة. -->
-    <script src="script.js"></script>
+    <script src="core.js"></script>
+    <script src="page-reports.js"></script>
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => navigator.serviceWorker.register('./service-worker.js').catch(console.warn));

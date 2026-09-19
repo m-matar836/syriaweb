@@ -1,0 +1,49 @@
+<!doctype html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>الدوام</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.1.1/css/all.min.css"><link rel="stylesheet" href="style.css"><link rel="manifest" href="manifest.json"></head><body>
+    <!-- =========== NAVBAR START =========== -->
+    <nav class="navbar navbar-expand-lg navbar-light bg-white shadow-sm">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="reports.html">
+                <i class="fa-solid fa-file-lines"></i>
+                لوحة التحكم
+            </a>  
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav" aria-controls="mainNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="mainNav">
+                <ul class="navbar-nav mb-2 mb-lg-0">
+                    <li class="nav-item">
+                        <a class="nav-link nav-link-reports" href="reports.html">إدخال التقارير</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link nav-link-history" href="history.html">سجل التعديلات</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link nav-link-movement" href="materialsMovement.html">سحب / مرتجع مواد</a>
+                    </li>
+                    <li class="nav-item"><a class="nav-link nav-link-attendance" href="attendance.html">الدوام</a></li>
+                    <li class="nav-item"><a class="nav-link nav-link-dashboard" href="dashboard.html">التحليلات</a></li>
+                    
+                </ul>
+                <div class="d-flex align-items-center me-auto">
+                    <button type="button" class="btn btn-sm btn-outline-primary me-2" data-refresh-cache title="جلب أحدث البيانات من Google Sheets">
+                        <i class="fa-solid fa-arrows-rotate me-1"></i>تحديث البيانات
+                    </button>
+                    <button type="button" class="dark-mode-toggle me-2" id="darkModeToggle" title="تبديل الوضع الداكن/الفاتح">
+                        <i class="fa-solid fa-moon"></i><i class="fa-solid fa-sun"></i>
+                    </button>
+                    <span id="welcomeMessage" class="navbar-text me-3"></span>&nbsp;&nbsp; 
+                    <button id="logoutBtn" class="btn btn-sm btn-outline-danger"><i class="fa-solid fa-sign-out-alt me-1"></i>تسجيل الخروج</button>
+                </div>
+            </div>
+        </div>
+    </nav>
+    <!-- =========== NAVBAR END =========== -->
+    <div id="offline-status" class="position-fixed top-0 start-50 translate-middle-x mt-2 px-3 py-2 rounded-pill shadow-sm small fw-bold" style="z-index:1080;display:none;"></div>
+<main class="main-container"><div class="card form-card mb-4"><div class="card-header"><i class="fa-solid fa-user-clock me-2"></i> تسجيل الدوام</div><div class="card-body"><p class="text-muted">سيتم تسجيل التاريخ والوقت تلقائياً.</p><form id="attendanceForm"><div class="row g-3"><div class="col-md-4"><label class="form-label fw-bold">حالة الدوام</label><select id="attendanceStatus" class="form-select" required><option value="">جار التحميل...</option></select></div><div class="col-md-8" id="attendanceStatementWrap"><label class="form-label fw-bold">بيان الدوام</label><input id="attendanceStatement" class="form-control" required maxlength="250" placeholder="دوام عادي أو مهمة ميدانية"></div><div class="col-md-8 d-none" id="medicalReportWrap"><label class="form-label fw-bold">التقرير الطبي (PDF أو صورة)</label><input type="file" id="medicalReportFile" class="form-control" accept="application/pdf,image/*"><small class="text-muted d-block mt-1">مطلوب عند اختيار حالة "اجازة مرضية". الحد الأقصى لحجم الملف 5 ميجابايت.</small></div><div class="col-12"><label class="form-label fw-bold">الملاحظات</label><textarea id="attendanceNotes" class="form-control" rows="2" maxlength="500"></textarea></div></div><button class="btn btn-primary mt-4" type="submit"><i class="fa-solid fa-check me-1"></i> تسجيل الدوام</button><div id="attendanceStatusMessage"></div></form></div></div>
+<div class="card history-card"><div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2"><h5 class="mb-0"><i class="fa-solid fa-list-check me-2"></i> سجل الدوام</h5><div class="d-flex gap-2"><div id="attendanceEmployeeFilterWrap" class="d-none"><select id="attendanceEmployeeFilter" class="form-select form-select-sm"></select></div><select id="attendanceFilterStatus" class="form-select form-select-sm"><option value="">كل الحالات</option></select><span id="attendanceCount" class="badge bg-primary">0 سجل</span></div></div><div class="table-responsive"><table class="table table-bordered table-hover mb-0"><thead class="table-light"><tr><th>Timestamp</th><th>Username</th><th>حالة الدوام</th><th>بيان الدوام</th><th>الملاحظات</th><th>التقرير الطبي</th></tr></thead><tbody id="attendance-table-body"></tbody></table></div></div></main><script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script><script src="core.js"></script><script src="page-attendance.js"></script>
+<script>
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => navigator.serviceWorker.register('./service-worker.js').catch(console.warn));
+    }
+</script>
+</body></html>

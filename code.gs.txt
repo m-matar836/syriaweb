@@ -8,41 +8,34 @@ const salesSheet = aSheet.getSheetByName("sales");
 const salesOfCompetitorSheet = aSheet.getSheetByName("salesOfCompetitor");
 const expensesSheet = aSheet.getSheetByName("expenses");
 const promotersSheet = aSheet.getSheetByName("promoters");
-const usersSheet = aSheet.getSheetByName("Users");
+// V42: صفحة Users أُلغيت — حسابات الموظفين (id, username, password, role)
+// أصبحت ضمن صفحة "Employees" بالأعمدة: A=id، B=name، C=username، D=password،
+// E=role (admin/manager/user)، F=jobPosition (المنصب الوظيفي)، G=mgr (اسم المدير المباشر).
+const ATTENDANCE_SHEET_NAME = "attendance";
+const ATTENDANCE_HEADERS = ["timestamp","username","status","attendanceStatement","notes","medicalReportUrl"];
+const STATUS_WT_SHEET_NAME = "statusWT";
+const MEDICAL_REPORT_FOLDER_NAME = "التقارير الطبية - الدوام";
+const SICK_LEAVE_STATUS_LABEL = "اجازة مرضية";
 const cache = CacheService.getScriptCache();
 const CACHE_EXPIRATION_SECONDS = 3600;
-const AUTH_CACHE_PREFIX = 'promotionAuth_';
-const INITIAL_DATA_CACHE_VERSION = 'v34-employee-column-detection-fix';
+const INITIAL_DATA_CACHE_VERSION = 'v26-employees-merged';
 const PRODUCT_LOOKUP_CACHE_VERSION = 'v25-product-lookup';
-const MOVEMENT_CACHE_VERSION = 'v31-movement-cache';
-
-function invalidateMovementCache(userId) {
-  try {
-    if (userId) cache.remove('festivalMovement_' + MOVEMENT_CACHE_VERSION + '_' + String(userId).trim());
-    cache.remove('festivalMovement_summary_' + MOVEMENT_CACHE_VERSION + '_' + String(userId || '').trim());
-  } catch (e) {}
-}
-
-function getMovementCacheKey(userId) {
-  return 'festivalMovement_' + MOVEMENT_CACHE_VERSION + '_' + String(userId || '').trim();
-}
-
 
 function doGet(e) {
   try {
     const action = e.parameter.action;
-    let sessionUser = null;
-    if (['getReports','getReportById','getUserFestivalMovements'].includes(action)) {
-      sessionUser = requireAuthenticatedRequest(e.parameter);
-    }
     let response;
     switch (action) {
       case "getInitialData": response = getInitialData(e.parameter.forceRefresh === "1"); break;
-      case "getReports": response = getReports(sessionUser.id, sessionUser.role, sessionUser.name); break;
-      case "getReportById": response = getReportById(e.parameter.id, sessionUser); break;
+      case "getReports": response = getReports(e.parameter.userId, e.parameter.role, e.parameter.userName, e.parameter.targetUserId); break;
+      case "getReportById": response = getReportById(e.parameter.id); break;
       case "findProductByBarcode": response = findProductByBarcode(e.parameter.barcode, e.parameter.campaign); break;
       case "getCompetitorProducts": response = getCompetitorProductsFromSheet(); break;
-      case "getUserFestivalMovements": response = getUserFestivalMovements(sessionUser.id, sessionUser.role, sessionUser.name); break;
+      case "getUserFestivalMovements": response = getUserFestivalMovements(e.parameter.userId, e.parameter.role, e.parameter.targetUserId); break;
+      case "getTeamOptions": response = getTeamOptions(e.parameter.userId, e.parameter.role); break;
+      case "getAttendance": response = getAttendance(e.parameter.userId, e.parameter.role, e.parameter.userName, e.parameter.targetUserId); break;
+      case "getStatusOptions": response = getStatusOptions(); break;
+      case "getDashboardData": response = getDashboardData(e.parameter.userId, e.parameter.role); break;
       default: response = {status:"error", message:"Invalid GET Action"};
     }
     return createJsonResponse(response);
@@ -55,7 +48,6 @@ function doPost(e) {
   try {
     const request = JSON.parse(e.postData.contents || '{}');
     const action = request.action;
-    const sessionUser = action === 'doLogin' ? null : requireAuthenticatedRequest(request.payload || request);
     let response;
 
     switch (action) {
@@ -64,15 +56,15 @@ function doPost(e) {
         break;
 
       case "submitReport":
-        response = handleReportSubmission(request.payload, sessionUser);
+        response = handleReportSubmission(request.payload);
         break;
 
       case "addLocation":
-        response = addLocation(request.payload, sessionUser);
+        response = addLocation(request.payload);
         break;
 
       case "updateProductPrice":
-        response = updateProductPrice(request.payload, sessionUser);
+        response = updateProductPrice(request.payload);
         break;
 
       case "refreshCache":
@@ -80,11 +72,18 @@ function doPost(e) {
         break;
 
       case "addFestivalMovement":
-        response = addFestivalMovement(request.payload, sessionUser);
+        response = addFestivalMovement(request.payload);
         break;
 
       case "closeOutUserTallyToSales":
-        response = closeOutUserTallyToSales(request.payload, sessionUser);
+        response = closeOutUserTallyToSales(request.payload);
+        break;
+      case "submitAttendance":
+        response = submitAttendance(request.payload);
+        break;
+
+      case "archiveOldReports":
+        response = archiveOldReports(request.payload);
         break;
 
       default:
@@ -108,149 +107,398 @@ function createJsonResponse(data) {
   return ContentService.createTextOutput(JSON.stringify(data)).setMimeType(ContentService.MimeType.JSON);
 }
 
-function doLogin(payload) {
-  if (!usersSheet || usersSheet.getLastRow() < 2) throw new Error("لا توجد بيانات مستخدمين");
-  const usersData = usersSheet.getRange(2,1,usersSheet.getLastRow()-1,5).getValues();
-  const inputUsernameLower = String(payload.username || '').toLowerCase();
-  const foundUser = usersData.find(row => String(row[1]).toLowerCase() === inputUsernameLower && String(row[2]) === String(payload.password));
-  if (!foundUser) throw new Error("Invalid credentials");
-   const user = {id:foundUser[0], username:foundUser[1], role:foundUser[3], name:foundUser[4]};
-   const token = Utilities.getUuid();
-   cache.put(AUTH_CACHE_PREFIX + token, JSON.stringify(user), 21600);
-   return {status:"success", user:user, authToken:token};
+function getAttendanceSheet_() {
+  let sheet = aSheet.getSheetByName(ATTENDANCE_SHEET_NAME);
+  if (!sheet) sheet = aSheet.insertSheet(ATTENDANCE_SHEET_NAME);
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1,1,1,ATTENDANCE_HEADERS.length).setValues([ATTENDANCE_HEADERS]);
+    sheet.setFrozenRows(1);
+  } else if (sheet.getLastColumn() < ATTENDANCE_HEADERS.length) {
+    // Upgrade older sheets (created before the medicalReportUrl column existed)
+    // by filling in any missing header cells without touching existing data.
+    const existingHeaders = sheet.getRange(1,1,1,ATTENDANCE_HEADERS.length).getValues()[0];
+    ATTENDANCE_HEADERS.forEach((h,i) => { if (!existingHeaders[i]) sheet.getRange(1,i+1).setValue(h); });
+  }
+  return sheet;
 }
 
-function getRoleName(role) { return String(role || '').trim().toLowerCase(); }
-function isAdminRole(role) { return getRoleName(role) === 'admin'; }
-function isManagerRole(role) {
-  const roleName = getRoleName(role);
-  return roleName === 'manager' || roleName === 'مدير';
+// Fallback list used only if the "statusWT" sheet cannot be created/read for
+// some reason (e.g. permissions). Also used as the seed data the very first
+// time the "statusWT" sheet is created.
+const ATTENDANCE_ALLOWED_STATUSES = ["بداية دوام","نهاية دوام","عطلة أسبوعية","عطلة رسمية","اجازة إدارية","اجازة مرضية","حضور إضافي"];
+
+// Returns the "statusWT" sheet, creating it (with a header row + the default
+// status list already filled in) the very first time the app runs.
+function getStatusWTSheet_() {
+  let sheet = aSheet.getSheetByName(STATUS_WT_SHEET_NAME);
+  if (!sheet) {
+    sheet = aSheet.insertSheet(STATUS_WT_SHEET_NAME);
+    sheet.getRange(1,1,1,1).setValue("حالة الدوام");
+    sheet.setFrozenRows(1);
+    sheet.getRange(2,1,ATTENDANCE_ALLOWED_STATUSES.length,1).setValues(ATTENDANCE_ALLOWED_STATUSES.map(s => [s]));
+  }
+  return sheet;
 }
-function requireAuthenticatedRequest(input) {
-  const token = String((input && (input.authToken || input.token)) || '').trim();
-  if (!token) throw new Error('انتهت جلسة الدخول، يرجى تسجيل الدخول من جديد');
-  const raw = cache.get(AUTH_CACHE_PREFIX + token);
-  if (!raw) throw new Error('انتهت جلسة الدخول، يرجى تسجيل الدخول من جديد');
-  const sessionUser = JSON.parse(raw);
-  const suppliedId = String((input && (input.userId || input.createdById)) || '').trim();
-  if (suppliedId && suppliedId !== String(sessionUser.id).trim()) throw new Error('لا تملك صلاحية تنفيذ هذا الطلب');
-  return sessionUser;
+
+// Reads the list of attendance-status options from the "statusWT" sheet
+// (column A, skipping the header row). Creates the sheet with the default
+// options on first run so the dropdowns always have data to show.
+function getStatusWTOptions_() {
+  const sheet = getStatusWTSheet_();
+  if (sheet.getLastRow() < 2) return ATTENDANCE_ALLOWED_STATUSES.slice();
+  const values = sheet.getRange(2,1,sheet.getLastRow()-1,1).getValues();
+  const options = values.map(row => String(row[0] || '').trim()).filter(v => v);
+  return options.length ? options : ATTENDANCE_ALLOWED_STATUSES.slice();
 }
-function assertReportOwnerAllowed(actor, ownerId, ownerName) {
-  const id = String(ownerId || '').trim(), name = String(ownerName || '').trim();
-  if (!id || !name) throw new Error('يجب اختيار الموظف صاحب التقرير');
-  if (isAdminRole(actor.role)) return;
-  if (isManagerRole(actor.role)) {
-    const names = getSubordinateNames(actor.name);
-    if (!names.has(name) || !new Set(getUserIdsByNames(names)).has(id)) {
-      throw new Error('لا يمكنك إنشاء أو تعديل تقرير إلا لموظف تابع لك');
+
+// GET action: returns the current dropdown options so the front-end (attendance
+// form select + history filter) always mirrors the "statusWT" sheet.
+function getStatusOptions() {
+  return {status:"success", options: getStatusWTOptions_()};
+}
+
+// Returns the Drive folder used for medical reports, creating it once and
+// remembering its ID in Script Properties. This intentionally avoids
+// DriveApp.getFoldersByName(), which needs the broad "See, edit, create and
+// delete ALL your Drive files" permission (drive / drive.readonly scope).
+// Only ever creating/opening a folder the script itself made keeps Apps
+// Script's auto-detected scope down to the narrower drive.file permission.
+const MEDICAL_REPORT_FOLDER_ID_PROP = "MEDICAL_REPORT_FOLDER_ID";
+function getMedicalReportFolder_() {
+  const props = PropertiesService.getScriptProperties();
+  const savedId = props.getProperty(MEDICAL_REPORT_FOLDER_ID_PROP);
+  if (savedId) {
+    try { return DriveApp.getFolderById(savedId); } catch (e) { /* folder was moved/deleted - recreate below */ }
+  }
+  const folder = DriveApp.createFolder(MEDICAL_REPORT_FOLDER_NAME);
+  props.setProperty(MEDICAL_REPORT_FOLDER_ID_PROP, folder.getId());
+  return folder;
+}
+
+// Saves an uploaded medical report (PDF or image, sent as base64) to Drive and
+// returns a shareable link to store alongside the attendance row.
+function saveMedicalReport_(base64Data, fileName, mimeType) {
+  let folder;
+  try {
+    folder = getMedicalReportFolder_();
+  } catch (e) {
+    throw new Error(driveAuthErrorMessage_(e));
+  }
+  const safeMime = String(mimeType || '').trim() || 'application/octet-stream';
+  const safeName = String(fileName || 'medical-report').trim();
+  const blob = Utilities.newBlob(Utilities.base64Decode(base64Data), safeMime, safeName);
+  let file;
+  try {
+    file = folder.createFile(blob);
+  } catch (e) {
+    throw new Error(driveAuthErrorMessage_(e));
+  }
+  try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) { /* sharing may be restricted by domain policy */ }
+  return file.getUrl();
+}
+
+// Turns Google's raw "you do not have permission to call DriveApp..." error
+// into a clear, actionable Arabic message pointing at the one-time fix
+// (see setupDriveAccess() below and the README).
+function driveAuthErrorMessage_(e) {
+  const raw = String((e && e.message) || e || '');
+  if (/DriveApp|drive\.readonly|permission/i.test(raw)) {
+    return "لم يتم منح صلاحية Google Drive لهذا المشروع بعد. افتح محرر Apps Script، شغّل الدالة setupDriveAccess مرة واحدة ووافق على الصلاحيات المطلوبة، ثم انشر نسخة جديدة من الويب أب (Deploy > Manage deployments > New version). راجع ملف الـ README المرفق لخطوات مفصّلة.";
+  }
+  return raw || "حدث خطأ غير متوقع أثناء حفظ التقرير الطبي على Drive";
+}
+
+/**
+ * ⚠️ شغّل هاي الدالة يدوياً من محرر Apps Script (زر ▶ Run) مرة واحدة فقط بعد
+ * نسخ هذا الكود لأول مرة، أو أي مرة يُطلب منك فيها صلاحية Drive من جديد.
+ * هدفها الوحيد هو إظهار نافذة "Authorization required" ليوافق مالك المشروع
+ * عليها؛ بدون هذه الموافقة اليدوية (لمرة واحدة) ترفض Google أي استدعاء
+ * لـ DriveApp من الويب أب برسالة "You do not have permission...".
+ * بعد الموافقة، لازم تنشر نسخة جديدة من الويب أب حتى يعمل رفع التقارير
+ * الطبية: Deploy > Manage deployments > قلم التعديل > Version: New version > Deploy.
+ */
+function setupDriveAccess() {
+  const folder = getMedicalReportFolder_();
+  Logger.log('تم منح صلاحية Drive بنجاح. رابط مجلد التقارير الطبية: ' + folder.getUrl());
+}
+
+function submitAttendance(payload) {
+  const sheet = getAttendanceSheet_();
+  const username = String(payload && (payload.username || payload.userName) || '').trim();
+  const status = String(payload && payload.status || '').trim();
+  const statement = String(payload && (payload.attendanceStatement || payload.statement) || '').trim();
+  const notes = String(payload && payload.notes || '').trim();
+  if (!username) throw new Error("اسم المستخدم مطلوب");
+  const allowedStatuses = getStatusWTOptions_();
+  if (allowedStatuses.indexOf(status) === -1) throw new Error("حالة الدوام غير صحيحة");
+  if (!statement) throw new Error("بيان الدوام مطلوب");
+
+  let medicalReportUrl = '';
+  const fileBase64 = payload && payload.medicalReportBase64;
+  if (status === SICK_LEAVE_STATUS_LABEL) {
+    if (!fileBase64) throw new Error("يجب إرفاق التقرير الطبي (PDF أو صورة) عند اختيار حالة اجازة مرضية");
+    medicalReportUrl = saveMedicalReport_(fileBase64, payload.medicalReportFileName, payload.medicalReportMimeType);
+  }
+
+  sheet.appendRow([new Date(),username,status,statement,notes,medicalReportUrl]);
+  sheet.getRange(sheet.getLastRow(),1).setNumberFormat("yyyy-MM-dd HH:mm:ss");
+  return {status:"success",message:"تم تسجيل الدوام بنجاح"};
+}
+
+function getAttendance(userId, userRole, userName, targetUserId) {
+  const sheet = getAttendanceSheet_();
+  if (sheet.getLastRow() < 2) return [];
+  const values = sheet.getRange(2,1,sheet.getLastRow()-1,ATTENDANCE_HEADERS.length).getValues();
+  const role = String(userRole || '').trim().toLowerCase();
+  const requesterId = String(userId || '').trim();
+  const selectedId = String(targetUserId || '').trim();
+  const allowedIds = getTeamMemberIds(requesterId,role);
+  let allowedNames = null;
+  const users = getUsersLite();
+  if (allowedIds !== null) {
+    const allowed = users.filter(u => allowedIds.indexOf(u.id) !== -1);
+    allowedNames = allowed.map(u => String(u.username || u.name || ''));
+    if (selectedId) {
+      const selected = allowed.find(u => u.id === selectedId);
+      allowedNames = selected ? [String(selected.username || selected.name || '')] : [];
     }
-    return;
+  } else if (selectedId) {
+    const selected = users.find(u => u.id === selectedId);
+    allowedNames = selected ? [String(selected.username || selected.name || '')] : [];
   }
-  if (id !== String(actor.id).trim() || name !== String(actor.name).trim()) {
-    throw new Error('لا يمكنك إنشاء أو تعديل تقرير إلا لحسابك');
-  }
+  return values.filter(row => allowedNames === null || allowedNames.indexOf(String(row[1] || '')) !== -1)
+    .reverse().map(row => ({
+      timestamp: row[0] instanceof Date ? Utilities.formatDate(row[0],Session.getScriptTimeZone(),"yyyy-MM-dd HH:mm:ss") : String(row[0] || ''),
+      username:String(row[1] || ''), status:String(row[2] || ''),
+      attendanceStatement:String(row[3] || ''), notes:String(row[4] || ''),
+      medicalReportUrl:String(row[5] || '')
+    }));
 }
 
-function normalizeArabicText(value) {
-  return String(value ?? '')
-    .trim()
-    .replace(/[\u064B-\u065F\u0670\u06D6-\u06ED]/g, '') // إزالة التشكيل
-    .replace(/[إأآا]/g, 'ا')
-    .replace(/ى/g, 'ي')
-    .replace(/ؤ/g, 'و')
-    .replace(/ئ/g, 'ي')
-    .replace(/ة/g, 'ه')
-    .replace(/ـ/g, '')
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
+function doLogin(payload) {
+  const sheet = aSheet.getSheetByName("Employees");
+  if (!sheet || sheet.getLastRow() < 2) throw new Error("لا توجد بيانات موظفين");
+  // الأعمدة: A=id(0)، B=name(1)، C=username(2)، D=password(3)، E=role(4) ...
+  const usersData = sheet.getRange(2,1,sheet.getLastRow()-1,7).getValues();
+  const inputUsernameLower = String(payload.username || '').toLowerCase();
+  const inputPassword = String(payload.password || '');
+
+  // V42: تحقق آمن من كلمة المرور.
+  // 1) إذا كانت المخزنة بصيغة hash (تبدأ بـ "pwd$") نقارن بالـ hash.
+  // 2) وإلا (نص عادي من أنظمة أقدم) نقارن مباشرة، وعند النجاح نرقّي المخزنة إلى hash تلقائياً
+  //    حتى لا تبقى أي كلمة مرور نصية في الـ Sheet.
+  for (let i = 0; i < usersData.length; i++) {
+    const row = usersData[i];
+    if (String(row[2]).toLowerCase() !== inputUsernameLower) continue;
+    const stored = String(row[3] || '');
+    if (!stored) continue;
+    let valid = false;
+    if (stored.indexOf('pwd$') === 0) {
+      // صيغة مخزنة: pwd$<salt>$<hash> حيث hash = HMAC(salt+password)
+      const parts = stored.split('$');
+      if (parts.length === 3) {
+        const salt = parts[1];
+        const expected = parts[2];
+        const actual = computePasswordHash_(inputPassword, salt);
+        valid = (actual === expected);
+      }
+    } else {
+      // نص عادي قديم: نتأكد من التطابق، ومن ثم نرقّيها لاحقاً.
+      valid = (stored === inputPassword);
+    }
+    if (!valid) continue;
+    // ترقية تلقائية لكلمات المرور النصية القديمة إلى hash (مرة واحدة لكل مستخدم).
+    if (stored.indexOf('pwd$') !== 0) {
+      const { salt, hash } = hashPassword_(inputPassword);
+      sheet.getRange(i + 2, 4).setValue('pwd$' + salt + '$' + hash);
+    }
+    // V42: المعرّف للواجهة = عمود id، وإن كان فارغاً نعتمد على username كبديل حتى
+    // تُبنى صلاحيات المدير (الفريق) بشكل صحيح حتى لمن لم يملأ عمود id.
+    const rawId = String(row[0] || '').trim();
+    const rawName = String(row[1] || '').trim();
+    const rawUsername = String(row[2] || '').trim();
+    return {status:"success", user:{
+      id: rawId || rawUsername,
+      username: rawUsername,
+      role: String(row[4] || '').trim().toLowerCase(),
+      jobPosition: String(row[5] || '').trim(),
+      name: rawName || rawUsername
+    }};
+  }
+  throw new Error("Invalid credentials");
+}
+
+// توليد salt عشوائي (طول 16 بايت) وتشفير كلمة المرور به.
+// نستخدم Utilities.computeHmacSha256Signature لعدم الحاجة لأي مكتبة خارجية،
+// والأهم أنه لا يمكن استرجاع كلمة المرور من الـ hash المخزّن.
+function hashPassword_(password) {
+  const salt = Utilities.getUuid().replace(/-/g, '').slice(0, 16);
+  const hash = computePasswordHash_(password, salt);
+  return { salt, hash };
+}
+
+function computePasswordHash_(password, salt) {
+  const sig = Utilities.computeHmacSha256Signature(String(password), String(salt));
+  return sig.map(b => ('0' + (b & 0xFF).toString(16)).slice(-2)).join('');
+}
+
+// دالة مساعدة لتوليد hash يدوياً لأي مستخدم جديد في الـ Sheet:
+// تُستخدم عند إضافة مستخدم جديد لنوع كلمة مرور نصية قديمة؛
+// لا تُستدعى تلقائياً في هذا الملف.
+function hashPasswordForUser(password) {
+  const { salt, hash } = hashPassword_(String(password || ''));
+  return 'pwd$' + salt + '$' + hash;
+}
+
+// معرّف = لأغراض التوثيق: الصيغة المخزنة الناتجة من hashPasswordForUser
+// تكون 'pwd$<salt>$<hash>' مثل: pwd$abc123def4567890$a1b2c3...
+
+
+// ===============================================================
+// نظام الصلاحيات: admin (كل شيء) / manager (فريقه فقط) / user (نفسه فقط)
+// ===============================================================
+
+// V42: تطبيع اسم لمقارنة متسامحة (إزالة مسافات مكررة + تجاهل حالة الأحرف) لتجنّب
+// فشل التطابق بسبب مسافة إضافية أو فرق في الأحرف الكبيرة/الصغيرة.
+function normalizeName_(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+// V42: قراءة بيانات حسابات الموظفين من صفحة "Employees" (لم تعد صفحة Users موجودة).
+// الأعمدة: A=id، B=name، C=username، D=password، E=role، F=jobPosition، G=mgr.
+function getUsersLite() {
+  const sheet = aSheet.getSheetByName('Employees');
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  const data = sheet.getRange(2,1,sheet.getLastRow()-1,7).getValues();
+  return data
+    .map(row => {
+      const rawId = String(row[0] ?? '').trim();
+      const rawName = String(row[1] ?? '').trim();
+      const rawUsername = String(row[2] ?? '').trim();
+      return {
+        id: rawId || rawUsername, // V42: احتياط — إن كان عمود id فارغاً نعتمد على username
+        name: rawName,
+        username: rawUsername,
+        role: String(row[4] ?? '').trim().toLowerCase(),
+        jobPosition: String(row[5] ?? '').trim(),
+        mgr: String(row[6] ?? '').trim(),
+        nname: normalizeName_(row[1]),
+        nusername: normalizeName_(row[2])
+      };
+    })
+    // نحتفظ بالصفوف التي تملك معرّفاً أو اسماً أو اسم مستخدم — لا نحذف من فراغ المعرّف.
+    .filter(u => u.id || u.name || u.username);
+}
+
+// V42: مصدر الحقيقة لهرمية الفريق هو صفحة "Employees" وعمود (G / mgr) الذي يحوي
+// اسم المدير المباشر لكل موظف. نعيد خريطة: الاسم المطبّع -> اسم مديره المطبّع.
+function getEmployeeMgrMap() {
+  const sheet = aSheet.getSheetByName('Employees');
+  if (!sheet || sheet.getLastRow() < 2) return {};
+  const rows = sheet.getDataRange().getValues();
+  const map = {};
+  for (let i = 1; i < rows.length; i++) {
+    const name = String(rows[i][1] ?? '').trim();   // B = name
+    const mgr = String(rows[i][6] ?? '').trim();     // G = mgr
+    if (name) map[normalizeName_(name)] = normalizeName_(mgr);
+  }
+  return map;
+}
+
+// يجد اسم الموظف من صفحة Employees حسب المعرّف، مع احتياط لمطابقة اسم المستخدم.
+function getUserNameById(userId) {
+  const id = String(userId || '').trim();
+  if (!id) return '';
+  const users = getUsersLite();
+  let u = users.find(x => x.id === id);
+  if (!u) u = users.find(x => x.username !== '' && normalizeName_(x.username) === normalizeName_(id));
+  return u ? (u.name || u.username) : '';
+}
+
+// V42: يجمع أسماء كل من يتبع (مباشرة أو عبر التسلسل الهرمي) اسماً معيّناً،
+// اعتماداً على صفحة Employees (عمود G / mgr). الـ BFS يغطي عدة مستويات.
+function collectSubordinateNames(mgrName, empMgrMap) {
+  const result = new Set();
+  const start = normalizeName_(mgrName);
+  if (!start) return result;
+  const queue = [start];
+  let guard = 0;
+  while (queue.length && guard++ < 2000) {
+    const current = queue.shift();
+    Object.keys(empMgrMap).forEach(name => {
+      if (empMgrMap[name] === current && !result.has(name)) {
+        result.add(name);
+        queue.push(name);
+      }
+    });
+  }
+  return result;
+}
+
+// يجمع معرّفات أعضاء الفريق الكامل (التسلسل الهرمي متعدد المستويات من صفحة Employees)
+// لمدير معيّن: نفسه + كل من يتبعه مباشرة أو عبر مستوى أدنى.
+function getManagerTeamIds(requesterId) {
+  const empMgrMap = getEmployeeMgrMap();
+  const requesterName = getUserNameById(requesterId);
+  const users = getUsersLite();
+  // نضمن إدراج المدير نفسه (بالمعرّف أو باسم المستخدم إن كان المعرّف فراغاً).
+  const idSet = new Set([String(requesterId).trim()]);
+  const requesterNname = normalizeName_(requesterName);
+  users.forEach(u => {
+    if (u.id === String(requesterId).trim()) idSet.add(u.id);
+    if (requesterNname && (u.nname === requesterNname || u.nusername === requesterNname)) idSet.add(u.id);
+  });
+
+  if (requesterName && Object.keys(empMgrMap).length) {
+    const subNames = collectSubordinateNames(requesterName, empMgrMap);
+    users.forEach(u => {
+      if (u.nname && subNames.has(u.nname)) idSet.add(u.id);
+    });
+  }
+
+  return Array.from(idSet);
+}
+
+// يحدد معرّفات المستخدمين التي يحق لصاحب الطلب رؤية بياناتهم.
+// يعيد null إذا كانت الصلاحية شاملة (admin)، أو مصفوفة معرّفات محصورة (manager/user).
+function getTeamMemberIds(requesterId, requesterRole) {
+  const role = String(requesterRole || '').trim().toLowerCase();
+  const id = String(requesterId || '').trim();
+  if (role === 'admin') return null;
+  if (role === 'manager') return getManagerTeamIds(id);
+  return [id];
+}
+
+// قائمة أسماء الموظفين لتعبئة القائمة المنسدلة: admin يرى الجميع، manager يرى فريقه (كل المستويات).
+function getTeamOptions(requesterId, requesterRole) {
+  const role = String(requesterRole || '').trim().toLowerCase();
+  const id = String(requesterId || '').trim();
+  if (role !== 'admin' && role !== 'manager') return { status:'success', options: [] };
+
+  const users = getUsersLite();
+  let list;
+  if (role === 'admin') {
+    list = users.filter(u => u.id !== id);
+  } else {
+    const allowedIds = new Set(getManagerTeamIds(id));
+    list = users.filter(u => u.id !== id && allowedIds.has(u.id));
+  }
+
+  list.sort((a,b) => String(a.name).localeCompare(String(b.name), 'ar'));
+  return { status:'success', options: list.map(u => ({ id:u.id, name:u.name || u.username })) };
 }
 
 function normalizeHeaderName(value) {
-  return normalizeArabicText(value);
-}
-
-// يبحث عن أول عمود يطابق أحد الأسماء المرشحة (مطابقة تامة، ثم مطابقة جزئية باحتواء
-// أحد الطرفين للآخر) بعد تطبيع النص العربي (توحيد الألف/التاء المربوطة، إزالة التشكيل...).
-// يُرجع -1 إن لم يُعثر على أي مطابقة (بلا قيمة احتياطية)، ليقرر المستدعي كيف يتصرف.
-function findHeaderColumnIndex(headers, names) {
-  const normalizedHeaders = headers.map(normalizeHeaderName);
-  const normalizedNames = names.map(normalizeHeaderName).filter(Boolean);
-  for (const name of normalizedNames) {
-    const idx = normalizedHeaders.indexOf(name);
-    if (idx !== -1) return idx;
-  }
-  for (let i = 0; i < normalizedHeaders.length; i++) {
-    const h = normalizedHeaders[i];
-    if (!h) continue;
-    if (normalizedNames.some(name => name && (h.includes(name) || name.includes(h)))) return i;
-  }
-  return -1;
+  return String(value ?? '').trim().replace(/\s+/g,' ').toLowerCase();
 }
 
 function getColumnIndex(headers, names, fallback) {
-  const idx = findHeaderColumnIndex(headers, names);
-  return idx !== -1 ? idx : fallback;
-}
-
-// يبحث عن ورقة مطابقة لأحد الأسماء المرشحة، ثم يجرّب مطابقة مرنة (بعد تطبيع النص) على كل
-// أسماء الأوراق الموجودة فعلياً في الملف. هذا يتحمّل اختلاف تسمية التبويب (مسافات، تشكيل،
-// "الموظفين" بدل "Employees"...الخ) دون الحاجة لإعادة تسمية التبويب في شيت المستخدم.
-function findSheetByCandidateNames(candidateNames) {
-  for (const n of candidateNames) {
-    const s = aSheet.getSheetByName(n);
-    if (s) return s;
+  const normalized = headers.map(normalizeHeaderName);
+  for (const name of names) {
+    const idx = normalized.indexOf(normalizeHeaderName(name));
+    if (idx !== -1) return idx;
   }
-  const normalizedCandidates = candidateNames.map(normalizeArabicText);
-  const sheets = aSheet.getSheets();
-  for (const sheet of sheets) {
-    const normalizedName = normalizeArabicText(sheet.getName());
-    if (normalizedCandidates.includes(normalizedName)) return sheet;
-  }
-  return null;
-}
-
-// كلمات دالة معروفة على "الدور الوظيفي" للموظف، تُستخدم لاكتشاف عمود الدور فعلياً من
-// محتوى بياناته في حال تعذّر التعرّف عليه من عنوان العمود.
-const KNOWN_EMPLOYEE_ROLE_KEYWORDS = [
-  'مسؤول جرد','مسؤول الجرد','جرد','منسق نقطة','منسق','مروج','مروّج','مشرف','مدير',
-  'مسؤول مبيعات','مسؤول','admin','manager','user','promoter','coordinator','inventory','supervisor'
-];
-
-function detectRoleColumnByValues(dataRows, excludeCols) {
-  let bestCol = -1, bestScore = -1;
-  const colCount = dataRows.reduce((max,row) => Math.max(max, row.length), 0);
-  for (let c = 0; c < colCount; c++) {
-    if (excludeCols.includes(c)) continue;
-    let score = 0;
-    dataRows.forEach(row => {
-      const v = normalizeArabicText(row[c]);
-      if (!v) return;
-      if (KNOWN_EMPLOYEE_ROLE_KEYWORDS.some(k => v.includes(normalizeArabicText(k)))) score++;
-    });
-    if (score > bestScore) { bestScore = score; bestCol = c; }
-  }
-  return bestScore > 0 ? bestCol : -1;
-}
-
-// عمود "المسؤول المباشر" غالباً يحتوي أسماء موجودة أصلاً ضمن عمود اسم الموظف نفسه
-// (كل موظف يتبع لموظف آخر مذكور بنفس الورقة)، فنكتشفه عبر مطابقة القيم لا العنوان.
-function detectMgrColumnByValues(dataRows, nameCol, excludeCols) {
-  const nameSet = new Set(dataRows.map(row => normalizeArabicText(row[nameCol])).filter(Boolean));
-  let bestCol = -1, bestScore = -1;
-  const colCount = dataRows.reduce((max,row) => Math.max(max, row.length), 0);
-  for (let c = 0; c < colCount; c++) {
-    if (c === nameCol || excludeCols.includes(c)) continue;
-    let score = 0;
-    dataRows.forEach(row => {
-      const v = normalizeArabicText(row[c]);
-      if (v && nameSet.has(v)) score++;
-    });
-    if (score > bestScore) { bestScore = score; bestCol = c; }
-  }
-  return bestScore > 0 ? bestCol : -1;
+  return fallback;
 }
 
 function isCancelledValue(value) {
@@ -291,51 +539,27 @@ function getInitialData(forceRefresh) {
 
   // Read only the sheets required by the application instead of scanning every
   // spreadsheet tab on each cache rebuild. This is noticeably faster on large files.
-  // كل ورقة لها أسماء مرشحة متعددة لتحمّل اختلاف تسمية التبويب فعلياً في ملف المستخدم.
-  const requiredSheetCandidates = {
-    Locations: ["Locations","المواقع","الأماكن","المناطق"],
-    Products: ["Products","المنتجات","المواد","المنتجات والاسعار"],
-    ProductsOfCompetitor: ["ProductsOfCompetitor","مواد المنافس","منتجات المنافس"],
-    Employees: ["Employees","الموظفين","الموظفون","الموظفين والمروجين","Staff","employees","فريق العمل"],
-    ExpenseItems: ["ExpenseItems","بنود المصاريف","المصاريف","بنود المصروفات"],
-    Users: ["Users","المستخدمين","المستخدمون"]
-  };
+  const requiredSheetNames = ["Locations","Products","ProductsOfCompetitor","Employees","ExpenseItems"];
   const sheetData = {};
-  Object.keys(requiredSheetCandidates).forEach(key => {
-    const sheet = findSheetByCandidateNames(requiredSheetCandidates[key]);
+  requiredSheetNames.forEach(sheetName => {
+    const sheet = aSheet.getSheetByName(sheetName);
     if (sheet && sheet.getLastRow() > 0) {
-      sheetData[key] = sheet.getDataRange().getValues();
+      sheetData[sheetName] = sheet.getDataRange().getValues();
     }
   });
 
   const locations = (sheetData.Locations || [[]]).slice(1).map(row => ({gov:row[0], region:row[1], market:row[2]}));
-  const employeeRows = sheetData.Employees || [];
-  const employeeHeaders = employeeRows[0] || [];
-  const employeeDataRows = employeeRows.slice(1);
-
-  const employeeNameColFound = findHeaderColumnIndex(employeeHeaders, ['name','employee','اسم الموظف','اسم الموظف/المروج','الاسم','الموظف']);
-  const employeeNameCol = employeeNameColFound !== -1 ? employeeNameColFound : 0;
-
-  const employeeRoleColFound = findHeaderColumnIndex(employeeHeaders, ['role','الدور','الصفة','نوع الموظف','الوظيفة','المسمى الوظيفي','الصفة الوظيفية','الدور الوظيفي']);
-  let employeeRoleCol = employeeRoleColFound;
-  if (employeeRoleCol === -1) {
-    employeeRoleCol = detectRoleColumnByValues(employeeDataRows, [employeeNameCol]);
-    if (employeeRoleCol === -1) employeeRoleCol = (employeeNameCol === 1 ? 0 : 1);
-  }
-
-  const employeeMgrColFound = findHeaderColumnIndex(employeeHeaders, ['mgr','manager','المسؤول المباشر','المدير المباشر','مسؤول','التبعية','يتبع ل','يتبع الى','تابع ل']);
-  let employeeMgrCol = employeeMgrColFound;
-  if (employeeMgrCol === -1 || employeeMgrCol === employeeRoleCol || employeeMgrCol === employeeNameCol) {
-    const detected = detectMgrColumnByValues(employeeDataRows, employeeNameCol, [employeeRoleCol]);
-    employeeMgrCol = detected !== -1 ? detected : (employeeNameCol === 2 ? 0 : 2);
-  }
-
-  const employees = employeeDataRows.map(row => ({
-    name: String(row[employeeNameCol] ?? '').trim(),
-    role: String(row[employeeRoleCol] ?? '').trim(),
-    mgr: String(row[employeeMgrCol] ?? '').trim()
-  })).filter(e => e.name);
-  const users = (sheetData.Users || [[]]).slice(1).map(row => ({id:row[0], role:row[3], name:row[4]}));
+  // V42: صفحة Employees الموحّدة الأعمدة: A=id، B=name، C=username، D=password،
+  // E=role (admin/manager/user)، F=jobPosition (المنصب الوظيفي)، G=mgr.
+  // "role" على الواجهة = المنصب الوظيفي (مسؤول جرد/منسق نقطة/مروج) كما كانت سابقاً.
+  const employees = (sheetData.Employees || [[]]).slice(1).map(row => ({
+    id: String(row[0] ?? '').trim(),
+    name: String(row[1] ?? '').trim(),
+    username: String(row[2] ?? '').trim(),
+    systemRole: String(row[4] ?? '').trim().toLowerCase(),
+    role: String(row[5] ?? '').trim(),            // jobPosition = المنصب الوظيفي
+    mgr: String(row[6] ?? '').trim()
+  })).filter(e => e.name || e.id);
 
   const products = {};
   const productRows = sheetData.Products || [];
@@ -363,7 +587,7 @@ function getInitialData(forceRefresh) {
     expenseItems[campaign].push(item);
   });
 
-  const initialData = {locations, products, competitorProducts: buildCompetitorProductsFromRows(sheetData.ProductsOfCompetitor || []), employees, users, expenseItems};
+  const initialData = {locations, products, competitorProducts: buildCompetitorProductsFromRows(sheetData.ProductsOfCompetitor || []), employees, expenseItems};
   try { cache.put(cacheKey, JSON.stringify(initialData), CACHE_EXPIRATION_SECONDS); } catch (e) { /* local/browser cache remains available */ }
   return initialData;
 }
@@ -506,8 +730,7 @@ function ensureReportsColumn(columnName) {
   return newCol;
 }
 
-function updateProductPrice(payload, actor) {
-  if (!isAdminRole(actor && actor.role)) throw new Error('تعديل أسعار المنتجات متاح لحساب admin فقط');
+function updateProductPrice(payload) {
   payload = payload || {};
   const productName = String(payload.product || '').trim();
   const campaign = String(payload.campaign || '').trim();
@@ -533,17 +756,20 @@ function updateProductPrice(payload, actor) {
   const prices = sheet.getRange(2, priceCol + 1, lastRow - 1, 1).getValues();
 
   let matches = 0;
-  const changedRows = [];
   for (let i = 0; i < names.length; i++) {
-    const rowName=String(names[i][0]??'').trim(), rowCampaign=String(campaigns[i][0]??'').trim(), rowBarcode=String(barcodes[i][0]??'').trim();
-    const campaignMatches=campaign==='شاملة' ? rowName===productName : (rowCampaign===campaign && rowName===productName);
-    if(!campaignMatches) continue;
-    if(barcode && rowBarcode && rowBarcode!==barcode) continue;
+    const rowName = String(names[i][0] ?? '').trim();
+    const rowCampaign = String(campaigns[i][0] ?? '').trim();
+    const rowBarcode = String(barcodes[i][0] ?? '').trim();
+    const campaignMatches = campaign === 'شاملة' ? rowName === productName : (rowCampaign === campaign && rowName === productName);
+    if (!campaignMatches) continue;
+    if (barcode && rowBarcode && rowBarcode !== barcode) continue;
+    prices[i][0] = price;
     matches++;
-    if(Number(prices[i][0])!==price) changedRows.push(i+2);
   }
-  if(!matches) throw new Error('المادة غير موجودة ضمن الحملة المحددة');
-  if (changedRows.length) sheet.getRangeList(changedRows.map(row => sheet.getRange(row, priceCol + 1).getA1Notation())).setValue(price);
+  if (!matches) throw new Error('المادة غير موجودة ضمن الحملة المحددة');
+
+  // Only the price column is written. This is dramatically faster than setValues on the entire sheet.
+  sheet.getRange(2, priceCol + 1, prices.length, 1).setValues(prices);
   SpreadsheetApp.flush();
   cache.remove('initialData_' + INITIAL_DATA_CACHE_VERSION);
   cache.remove('allReports_v3_user_history');
@@ -557,7 +783,8 @@ function refreshCache() {
     'initialData_' + INITIAL_DATA_CACHE_VERSION,
     'allReports',
     'allReports_v2',
-    'allReports_v3_user_history'
+    'allReports_v3_user_history',
+    FESTIVAL_MOVEMENTS_CACHE_KEY
   ]);
 
   // إعادة بناء بيانات الموقع فوراً من الـSheet، وليس فقط حذف الكاش.
@@ -570,11 +797,8 @@ function refreshCache() {
   };
 }
 
-function handleReportSubmission(reportData, actor) {
+function handleReportSubmission(reportData) {
   reportData = reportData || {};
-  if (!actor) throw new Error('جلسة الدخول غير صالحة');
-  ensureReportsColumn('reportOwnerId');
-  ensureReportsColumn('reportOwnerName');
   ensureReportsColumn('createdById');
   ensureReportsColumn('createdByName');
   const submittedUserId = String(reportData.createdById || '').trim();
@@ -596,23 +820,12 @@ function handleReportSubmission(reportData, actor) {
     const ownerNameCol = headers.findIndex(h => normalizeHeaderName(h) === normalizeHeaderName('createdByName'));
     if (ownerIdCol >= 0 && String(existingRow[ownerIdCol] || '').trim()) reportData.createdById = String(existingRow[ownerIdCol]);
     if (ownerNameCol >= 0 && String(existingRow[ownerNameCol] || '').trim()) reportData.createdByName = String(existingRow[ownerNameCol]);
-    const reportOwnerIdCol = headers.findIndex(h => normalizeHeaderName(h) === normalizeHeaderName('reportOwnerId'));
-    const reportOwnerNameCol = headers.findIndex(h => normalizeHeaderName(h) === normalizeHeaderName('reportOwnerName'));
-    if (reportOwnerIdCol >= 0) reportData.reportOwnerId = String(existingRow[reportOwnerIdCol] || '').trim();
-    if (reportOwnerNameCol >= 0) reportData.reportOwnerName = String(existingRow[reportOwnerNameCol] || '').trim();
   }
 
   // ملكية التقرير: تُحفظ عند الإنشاء، وعند التعديل يتم الحفاظ على المالك الأصلي أعلاه.
   if (existingRowIndex === -1) {
     reportData.createdById = submittedUserId;
     reportData.createdByName = submittedUserName;
-  }
-  if (!reportData.reportOwnerId) reportData.reportOwnerId = submittedUserId;
-  if (!reportData.reportOwnerName) reportData.reportOwnerName = submittedUserName;
-  assertReportOwnerAllowed(actor, reportData.reportOwnerId, reportData.reportOwnerName);
-  if (existingRowIndex === -1) {
-    reportData.createdById = String(actor.id);
-    reportData.createdByName = String(actor.name);
   }
 
   const newRow = headers.map(header => reportData[header] === undefined ? '' : (Array.isArray(reportData[header]) ? JSON.stringify(reportData[header]) : reportData[header]));
@@ -686,56 +899,7 @@ function normalizeReportDateTimeFields(reportObj) {
   return reportObj;
 }
 
-// ===============================================================
-// صلاحيات المدير: كل حساب دوره "مدير" في ورقة Users يرى تلقائياً تقاريره
-// الشخصية بالإضافة إلى تقارير كل من يتبع له في شجرة "المسؤول المباشر"
-// (عمود mgr في ورقة Employees)، مهما كان عمق التسلسل الإداري.
-// دور "admin" يبقى كما هو: رؤية شاملة لكل شيء بلا استثناء.
-// ===============================================================
-const MANAGER_ROLE_NAME = "مدير";
-
-// يبني شجرة التبعية من ورقة Employees ويُرجع مجموعة كل أسماء الموظفين الذين
-// يتبعون (بشكل مباشر أو غير مباشر) للاسم المُعطى. لا يتضمن اسم المدير نفسه.
-function getSubordinateNames(managerName) {
-  const name = String(managerName || '').trim();
-  const result = new Set();
-  if (!name) return result;
-
-  const initialData = getInitialData(false);
-  const employees = initialData.employees || [];
-  const childrenMap = new Map();
-  employees.forEach(e => {
-    const empName = String(e.name || '').trim();
-    const mgr = String(e.mgr || '').trim();
-    if (!empName || !mgr) return;
-    if (!childrenMap.has(mgr)) childrenMap.set(mgr, []);
-    childrenMap.get(mgr).push(empName);
-  });
-
-  const visited = new Set([name]);
-  const queue = [name];
-  while (queue.length) {
-    const current = queue.shift();
-    (childrenMap.get(current) || []).forEach(childName => {
-      if (!visited.has(childName)) {
-        visited.add(childName);
-        result.add(childName);
-        queue.push(childName);
-      }
-    });
-  }
-  return result;
-}
-
-// يُرجع كل معرّفات المستخدمين (Users.id) الذين أسماؤهم ضمن المجموعة المُعطاة.
-function getUserIdsByNames(names) {
-  const wanted = new Set(Array.from(names || []).map(n => String(n).trim()).filter(Boolean));
-  if (!wanted.size || !usersSheet || usersSheet.getLastRow() < 2) return [];
-  const usersData = usersSheet.getRange(2,1,usersSheet.getLastRow()-1,5).getValues();
-  return usersData.filter(row => wanted.has(String(row[4] ?? '').trim())).map(row => String(row[0]));
-}
-
-function getReports(userId, userRole, userName) {
+function getReports(userId, userRole, userName, targetUserId) {
   // v2 حتى لا نستخدم بيانات allReports القديمة المخزنة قبل إصلاح التاريخ والوقت.
   const cacheKey = 'allReports_v3_user_history';
   const cachedData = cache.get(cacheKey);
@@ -784,37 +948,258 @@ function getReports(userId, userRole, userName) {
   }
 
   // سجل المستخدم: نعتمد على createdById، مع fallback إلى الاسم للتقارير القديمة/التي لا تحتوي المعرّف.
-  const normalizedRole = getRoleName(userRole);
-  if (isAdminRole(normalizedRole) || !userId) return allReports;
+  const normalizedRole = String(userRole || '').trim().toLowerCase();
+  if (!userId) return allReports;
   const uid = String(userId).trim();
   const uname = String(userName || '').trim();
 
-  // صلاحية "مدير": يرى تقاريره الشخصية بالإضافة إلى تقارير كل من يتبع له.
-  if (isManagerRole(normalizedRole)) {
-    const subNames = getSubordinateNames(uname);
-    const visibleIds = new Set(getUserIdsByNames(subNames));
-    return allReports.filter(r => {
-      const ownerId = String(r.reportOwnerId || r.createdById || '').trim();
-      const ownerName = String(r.reportOwnerName || r.createdByName || '').trim();
-      if (ownerId) return visibleIds.has(ownerId);
-      return ownerName && subNames.has(ownerName);
-    });
+  // نطاق الصلاحية: null = الكل (admin)، أو مصفوفة معرّفات مسموحة (manager: فريقه، user: نفسه فقط).
+  let allowedIds = getTeamMemberIds(uid, normalizedRole);
+
+  // إذا طلب المستخدم عرض موظف/تقارير محددة عبر القائمة المنسدلة، نُضيّق النطاق إليه
+  // شرط أن يكون ضمن صلاحياته أصلاً (حماية من تجاوز الصلاحيات).
+  const target = String(targetUserId || '').trim();
+  if (target && target !== 'all' && target !== 'الكل') {
+    if (allowedIds === null || allowedIds.indexOf(target) !== -1) {
+      allowedIds = [target];
+    }
   }
 
+  if (allowedIds === null) return allReports; // admin بدون تضييق إضافي
+
+  const idsSet = new Set(allowedIds);
+  // V42: نطابق أيضاً بالأسماء/أسماء المستخدمين — لأي تقرير يفتقد createdById،
+  // نسمح به لو كان createdByName لأحد أعضاء الفريق (لا نقصر على المستخدم نفسه).
+  const allowedNameSet = new Set();
+  getUsersLite().forEach(u => {
+    if (allowedIds.indexOf(u.id) !== -1) {
+      if (u.nname) allowedNameSet.add(u.nname);
+      if (u.nusername) allowedNameSet.add(normalizeName_(u.nusername));
+    }
+  });
+
   return allReports.filter(r => {
-    const ownerId = String(r.reportOwnerId || r.createdById || '').trim();
-    const ownerName = String(r.reportOwnerName || r.createdByName || '').trim();
-    return (ownerId && ownerId === uid) || (!ownerId && uname && ownerName === uname);
+    const ownerId = String(r.createdById || '').trim();
+    if (ownerId && idsSet.has(ownerId)) return true;
+    const ownerName = String(r.createdByName || '').trim();
+    return !!ownerName && allowedNameSet.has(normalizeName_(ownerName));
   });
 }
 
-function getReportById(id, actor) {
-  const report = getReports(actor && actor.id, actor && actor.role, actor && actor.name).find(r => String(r.id) === String(id));
+function getReportById(id) {
+  const report = getReports().find(r => String(r.id) === String(id));
   return report ? {status:'success',report:report} : {status:'error',message:'Report not found'};
 }
 
-function addLocation(payload, actor) {
-  if (!isAdminRole(actor && actor.role)) throw new Error('إضافة المواقع متاحة لحساب admin فقط');
+// ===============================================================
+// V42: بيانات لوحة التحليلات (dashboard.html) — إحصائيات مجمّعة سريعة
+// ===============================================================
+function getDashboardData(userId, userRole) {
+  // نعيد تقارير النطاق المسموح به فقط (نفس منطق getReports لكن بدون تفاصيل المبيعات الكاملة).
+  const role = String(userRole || '').trim().toLowerCase();
+  const uid = String(userId || '').trim();
+  const all = getReports(uid, role, '', 'all'); // خاضع للصلاحيات admin/manager/user
+  if (!Array.isArray(all)) return { status:'success', kpis:{}, daily:{}, campaigns:[], governorates:[], employees:[] };
+
+  // ---- KPIs ----
+  let totalSales = 0, totalQty = 0;
+  const employeesSet = new Set();
+  all.forEach(r => {
+    (r.sales || []).forEach(s => {
+      totalSales += (Number(s.price) || 0) * (Number(s.quantity) || 0);
+      totalQty += Number(s.quantity) || 0;
+    });
+    if (r.createdByName) employeesSet.add(String(r.createdByName));
+  });
+
+  // ---- Daily sales (آخر 30 يوم) ----
+  const dailyMap = {};
+  const today = new Date();
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(today); d.setDate(d.getDate() - i);
+    const key = Utilities.formatDate(d, aSheet.getSpreadsheetTimeZone() || Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    dailyMap[key] = 0;
+  }
+  all.forEach(r => {
+    if (!r.date) return;
+    const key = String(r.date).slice(0, 10);
+    if (!(key in dailyMap)) return;
+    let sum = 0;
+    (r.sales || []).forEach(s => sum += (Number(s.price) || 0) * (Number(s.quantity) || 0));
+    dailyMap[key] += sum;
+  });
+
+  // ---- Campaign totals ----
+  const campMap = {};
+  all.forEach(r => {
+    const c = String(r.campaign || 'غير محدد');
+    if (!campMap[c]) campMap[c] = 0;
+    (r.sales || []).forEach(s => campMap[c] += (Number(s.price) || 0) * (Number(s.quantity) || 0));
+  });
+
+  // ---- Governorate totals ----
+  const govMap = {};
+  all.forEach(r => {
+    const g = String(r.governorate || 'غير محدد');
+    if (!govMap[g]) govMap[g] = 0;
+    (r.sales || []).forEach(s => govMap[g] += (Number(s.price) || 0) * (Number(s.quantity) || 0));
+  });
+
+  // ---- Employee performance ----
+  const empMap = {};
+  all.forEach(r => {
+    const name = String(r.createdByName || 'غير معروف');
+    if (!empMap[name]) empMap[name] = { name, reports: 0, sales: 0 };
+    empMap[name].reports++;
+    (r.sales || []).forEach(s => empMap[name].sales += (Number(s.price) || 0) * (Number(s.quantity) || 0));
+  });
+  const employees = Object.values(empMap).sort((a,b) => b.sales - a.sales).slice(0, 15);
+
+  const zip = (obj, max = 100) => Object.entries(obj).sort((a,b) => b[1]-a[1]).slice(0, max).map(([label, value]) => ({ label, value }));
+
+  return {
+    status: 'success',
+    kpis: {
+      totalReports: all.length,
+      totalSales: Math.round(totalSales * 100) / 100,
+      totalQuantity: totalQty,
+      activeEmployees: employeesSet.size
+    },
+    daily: Object.keys(dailyMap).map(k => ({ date: k, value: dailyMap[k] })),
+    campaigns: zip(campMap),
+    governorates: zip(govMap, 10),
+    employees
+  };
+}
+
+// ===============================================================
+// V44: أرشفة التقارير القديمة يدوياً (تُستخدم عادة مرة شهرياً) — تنقل التقارير
+// الأقدم من عدد الأشهر المحدد، وكل بياناتها المرتبطة (sales/salesOfCompetitor/
+// expenses/promoters/festivalMovement) إلى أوراق أرشيف منفصلة (تُنشأ تلقائياً
+// إن لم تكن موجودة)، ثم تُفرغ كل الكاش فوراً حتى لا يبقى أي فرق بين البيانات
+// الحقيقية والمعروضة. متاحة لحساب admin فقط، لأنها عملية شاملة على كل التقارير
+// بغض النظر عن الفريق (لا معنى لأرشفة جزئية لفريق واحد فقط).
+// ===============================================================
+function ensureArchiveSheet(name, headers) {
+  let sheet = aSheet.getSheetByName(name);
+  if (!sheet) {
+    sheet = aSheet.insertSheet(name);
+    sheet.getRange(1,1,1,headers.length).setValues([headers]);
+  } else if (sheet.getLastRow() < 1) {
+    sheet.getRange(1,1,1,headers.length).setValues([headers]);
+  }
+  return sheet;
+}
+
+function appendRowsToArchive(archiveSheet, rows) {
+  if (!rows.length) return;
+  archiveSheet.getRange(archiveSheet.getLastRow()+1,1,rows.length,rows[0].length).setValues(rows);
+}
+
+function archiveOldReports(payload) {
+  payload = payload || {};
+  const role = String(payload.role || '').trim().toLowerCase();
+  if (role !== 'admin') throw new Error('أرشفة التقارير القديمة متاحة فقط لحساب admin');
+
+  const monthsToKeep = Number(payload.monthsToKeep);
+  if (!Number.isFinite(monthsToKeep) || monthsToKeep <= 0) throw new Error('عدد الأشهر يجب أن يكون رقماً أكبر من صفر');
+
+  const timezone = aSheet.getSpreadsheetTimeZone() || Session.getScriptTimeZone() || 'GMT';
+  const cutoff = new Date();
+  cutoff.setMonth(cutoff.getMonth() - monthsToKeep);
+  const cutoffStr = Utilities.formatDate(cutoff, timezone, 'yyyy-MM-dd');
+
+  if (reportsSheet.getLastRow() < 2) return { status:'success', archivedReports:0, cutoff: cutoffStr };
+
+  // --- 1) تقسيم ورقة Reports إلى (تُبقى) و(تُؤرشف) حسب عمود date ---
+  const reportsValues = reportsSheet.getDataRange().getValues();
+  const reportHeaders = reportsValues[0];
+  const dateColIdx = reportHeaders.findIndex(h => normalizeHeaderName(h) === normalizeHeaderName('date'));
+  const idColIdx = reportHeaders.findIndex(h => normalizeHeaderName(h) === normalizeHeaderName('id'));
+  if (dateColIdx === -1 || idColIdx === -1) throw new Error('تعذر تحديد عمودي id/date في ورقة Reports');
+
+  const dataRows = reportsValues.slice(1);
+  const toArchive = [];
+  const toKeep = [];
+  const archivedIds = new Set();
+  dataRows.forEach(row => {
+    const rowDate = String(row[dateColIdx] || '').slice(0, 10);
+    if (rowDate && rowDate < cutoffStr) {
+      toArchive.push(row);
+      archivedIds.add(String(row[idColIdx]));
+    } else {
+      toKeep.push(row);
+    }
+  });
+
+  if (!toArchive.length) {
+    return { status:'success', archivedReports:0, cutoff: cutoffStr, message: 'لا توجد تقارير أقدم من هذا التاريخ لأرشفتها' };
+  }
+
+  // --- 2) نقل ورقة Reports نفسها ---
+  const reportsArchiveSheet = ensureArchiveSheet('Reports_Archive', reportHeaders);
+  appendRowsToArchive(reportsArchiveSheet, toArchive);
+  reportsSheet.clearContents();
+  reportsSheet.getRange(1,1,1,reportHeaders.length).setValues([reportHeaders]);
+  if (toKeep.length) reportsSheet.getRange(2,1,toKeep.length,reportHeaders.length).setValues(toKeep);
+
+  // --- 3) نفس المنطق لبقية الأوراق المرتبطة (مفتاحها reportId في العمود الأول) ---
+  const relatedSheets = [
+    { sheet: salesSheet, archiveName: 'sales_Archive' },
+    { sheet: salesOfCompetitorSheet, archiveName: 'salesOfCompetitor_Archive' },
+    { sheet: expensesSheet, archiveName: 'expenses_Archive' },
+    { sheet: promotersSheet, archiveName: 'promoters_Archive' }
+  ];
+  relatedSheets.forEach(({ sheet, archiveName }) => {
+    if (!sheet || sheet.getLastRow() < 2) return;
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0];
+    const rows = values.slice(1);
+    const keep = [];
+    const archive = [];
+    rows.forEach(row => {
+      if (archivedIds.has(String(row[0]))) archive.push(row); else keep.push(row);
+    });
+    if (!archive.length) return;
+    const archiveSheet = ensureArchiveSheet(archiveName, headers);
+    appendRowsToArchive(archiveSheet, archive);
+    sheet.clearContents();
+    sheet.getRange(1,1,1,headers.length).setValues([headers]);
+    if (keep.length) sheet.getRange(2,1,keep.length,headers.length).setValues(keep);
+  });
+
+  // --- 4) نفس المنطق لورقة festivalMovement — الحركات اليدوية (سحب/مرتجع) التي لا
+  //         تحمل reportId (فارغة) لا تُؤرشف أبداً لأنها غير مرتبطة بتقرير محدد أصلاً ---
+  const movementSheet = aSheet.getSheetByName(FESTIVAL_MOVEMENT_SHEET_NAME);
+  if (movementSheet && movementSheet.getLastRow() > 1) {
+    const values = movementSheet.getDataRange().getValues();
+    const headers = values[0];
+    const rows = values.slice(1);
+    const keep = [];
+    const archive = [];
+    rows.forEach(row => {
+      const rid = String(row[0] || '').trim();
+      if (rid && archivedIds.has(rid)) archive.push(row); else keep.push(row);
+    });
+    if (archive.length) {
+      const archiveSheet = ensureArchiveSheet('festivalMovement_Archive', headers);
+      appendRowsToArchive(archiveSheet, archive);
+      movementSheet.clearContents();
+      movementSheet.getRange(1,1,1,headers.length).setValues([headers]);
+      if (keep.length) movementSheet.getRange(2,1,keep.length,headers.length).setValues(keep);
+    }
+  }
+
+  // --- 5) تفريغ كل الكاش فوراً حتى لا يبقى أي فرق بين البيانات الحقيقية والمعروضة ---
+  try {
+    cache.removeAll(['allReports','allReports_v2','allReports_v3_user_history','initialData_' + INITIAL_DATA_CACHE_VERSION]);
+    cache.remove(FESTIVAL_MOVEMENTS_CACHE_KEY);
+  } catch (e) {}
+
+  return { status:'success', archivedReports: toArchive.length, cutoff: cutoffStr };
+}
+
+function addLocation(payload) {
   const sheet = aSheet.getSheetByName("Locations");
 
   if (!sheet) {
@@ -1045,106 +1430,99 @@ function ensureFestivalMovementSheet() {
   return sheet;
 }
 
-// القراءة الأساسية المخزَّنة مؤقتاً (Cache) لكل حركات مستخدم واحد بعينه.
-function getFestivalMovementsRaw(userId) {
-  const id = String(userId || '').trim();
-  if (!id) return { status:'success', movements: [] };
-  const key = getMovementCacheKey(id);
-  try {
-    const cached = cache.get(key);
-    if (cached) return JSON.parse(cached);
-  } catch (e) {}
+const FESTIVAL_MOVEMENTS_CACHE_KEY = 'allFestivalMovements_v1';
+
+// قراءة كل حركات الشيت مرة واحدة وتخزينها في الكاش (سريعة)، ثم نُفلترها بالذاكرة
+// حسب صلاحية كل طالب بدل قراءة الشيت من جديد في كل طلب.
+function getAllFestivalMovementsCached() {
+  const cached = cache.get(FESTIVAL_MOVEMENTS_CACHE_KEY);
+  if (cached) return JSON.parse(cached);
 
   const sheet = ensureFestivalMovementSheet();
-  if (sheet.getLastRow() < 2) {
-    const empty = { status:'success', movements: [] };
-    try { cache.put(key, JSON.stringify(empty), 300); } catch (e) {}
-    return empty;
-  }
-
-  const timezone = aSheet.getSpreadsheetTimeZone() || Session.getScriptTimeZone() || 'GMT';
-  const data = sheet.getRange(2,1,sheet.getLastRow()-1,FESTIVAL_MOVEMENT_HEADERS.length).getValues();
-  const movements = data
-    .filter(row => String(row[5]).trim() === id && String(row[1] || '').trim())
-    .map(row => {
+  let movements = [];
+  if (sheet.getLastRow() >= 2) {
+    const timezone = aSheet.getSpreadsheetTimeZone() || Session.getScriptTimeZone() || 'GMT';
+    const data = sheet.getRange(2,1,sheet.getLastRow()-1,FESTIVAL_MOVEMENT_HEADERS.length).getValues();
+    movements = data.map(row => {
       const dateValue = row[4];
       const dateText = (dateValue instanceof Date && !isNaN(dateValue.getTime()))
         ? Utilities.formatDate(dateValue, timezone, 'yyyy-MM-dd HH:mm')
         : String(dateValue || '');
-      return { reportId:String(row[0]||''), item:String(row[1]), quantity:Number(row[2])||0, operation:String(row[3]), date:dateText, rawDate:(dateValue instanceof Date)?dateValue.getTime():0, createdById:String(row[5]||''), createdByName:String(row[6]||''), invoiceNumber:String(row[7]||'') };
+      return {
+        reportId: String(row[0] || ''),
+        item: String(row[1]),
+        quantity: Number(row[2]) || 0,
+        operation: String(row[3]),
+        date: dateText,
+        rawDate: (dateValue instanceof Date) ? dateValue.getTime() : 0,
+        createdById: String(row[5] || ''),
+        createdByName: String(row[6] || ''),
+        invoiceNumber: String(row[7] || '')
+      };
     });
-  movements.sort((a,b)=>b.rawDate-a.rawDate);
-  const result={status:'success',movements};
-  try { cache.put(key, JSON.stringify(result), 300); } catch(e) {}
-  return result;
+  }
+  try { cache.put(FESTIVAL_MOVEMENTS_CACHE_KEY, JSON.stringify(movements), CACHE_EXPIRATION_SECONDS); } catch (e) {}
+  return movements;
 }
 
-// كل معرّفات المستخدمين الذين لديهم أي حركة على الإطلاق في festivalMovement (تُستخدم لصلاحية admin فقط).
-function getAllFestivalMovementUserIds() {
-  const sheet = ensureFestivalMovementSheet();
-  if (sheet.getLastRow() < 2) return [];
-  const idRows = sheet.getRange(2,6,sheet.getLastRow()-1,1).getValues(); // العمود 6 = createdById
-  const set = new Set();
-  idRows.forEach(([id]) => { const v = String(id||'').trim(); if (v) set.add(v); });
-  return Array.from(set);
-}
-
-// كل حركات مستخدم معيّن (سحب/مرتجع يدوي + صرف تلقائي + مبيعات يدوية عبر زر التصفير)، الأحدث أولاً.
-// دور "admin": يرى حركات كل المستخدمين. دور "مدير": يرى حركاته + حركات كل من يتبع له.
-// أي دور آخر: يرى حركاته الشخصية فقط (السلوك الأصلي دون أي تغيير).
-function getUserFestivalMovements(userId, userRole, userName) {
+// كل حركات مستخدم/فريق ضمن صلاحية الطالب (سحب/مرتجع يدوي + صرف تلقائي + مبيعات يدوية عبر زر التصفير)، الأحدث أولاً.
+// admin: يرى الجميع أو يضيّق لموظف عبر targetUserId. manager: فريقه فقط (نفسه + كامل التسلسل الهرمي من صفحة Employees: عمود mgr).
+// user: نفسه فقط دائماً بغض النظر عن targetUserId.
+function getUserFestivalMovements(userId, userRole, targetUserId) {
   const id = String(userId || '').trim();
   if (!id) throw new Error('معرّف المستخدم مطلوب');
+  const normalizedRole = String(userRole || '').trim().toLowerCase();
 
-  let idsToFetch;
-  if (String(userRole || '').trim().toLowerCase() === 'admin') {
-    idsToFetch = getAllFestivalMovementUserIds();
-    if (!idsToFetch.includes(id)) idsToFetch.push(id);
-  } else if (isManagerRole(userRole)) {
-    const subNames = getSubordinateNames(userName);
-    const subIds = getUserIdsByNames(subNames);
-    idsToFetch = Array.from(new Set(subIds));
-  } else {
-    idsToFetch = [id];
+  let allowedIds = getTeamMemberIds(id, normalizedRole); // null = الكل (admin)
+  const target = String(targetUserId || '').trim();
+  if (target && target !== 'all' && target !== 'الكل') {
+    if (allowedIds === null || allowedIds.indexOf(target) !== -1) {
+      allowedIds = [target];
+    }
   }
 
-  let merged = [];
-  idsToFetch.forEach(uid => {
-    const r = getFestivalMovementsRaw(uid);
-    if (r && Array.isArray(r.movements)) merged = merged.concat(r.movements);
-  });
+  const all = getAllFestivalMovementsCached();
+  const movements = (allowedIds === null)
+    ? all.slice()
+    : (() => { const s = new Set(allowedIds); return all.filter(m => s.has(m.createdById)); })();
 
-  merged.sort((a,b) => (b.rawDate||0) - (a.rawDate||0));
-  merged.forEach(m => delete m.rawDate);
-  return { status:'success', movements: merged };
+  movements.sort((a,b) => b.rawDate - a.rawDate);
+  const cleaned = movements.map(m => { const c = Object.assign({}, m); delete c.rawDate; return c; });
+  return { status:'success', movements: cleaned };
 }
 
 // يحسب لكل مادة: إجمالي السحب/المرتجع/الصرف التلقائي/المبيعات اليدوية، والمتبقي الصافي
-// = سحب - مرتجع - صرف - مبيعات، لمستخدم واحد بعينه (لا تُطبَّق هنا صلاحيات المدير/الأدمن
-// عمداً: تصفير المحصلة عبر closeOutUserTallyToSales يبقى مقتصراً على حساب المستخدم نفسه فقط).
+// = سحب - مرتجع - صرف - مبيعات، لمستخدم معيّن.
 function computeUserFestivalSummary(userId) {
   const id = String(userId || '').trim();
   if (!id) return [];
-  const result = getFestivalMovementsRaw(id);
+  const sheet = ensureFestivalMovementSheet();
+  if (sheet.getLastRow() < 2) return [];
+
+  const data = sheet.getRange(2,1,sheet.getLastRow()-1,FESTIVAL_MOVEMENT_HEADERS.length).getValues();
   const map = new Map();
-  (result.movements || []).forEach(row => {
-    const item = String(row.item || '').trim();
+  data.filter(row => String(row[5]).trim() === id).forEach(row => {
+    const item = String(row[1] || '').trim();
     if (!item) return;
-    if (!map.has(item)) map.set(item,{item,withdrawn:0,returned:0,expensed:0,sold:0});
-    const entry=map.get(item), qty=Number(row.quantity)||0, op=String(row.operation||'').trim();
-    if(op==='سحب') entry.withdrawn+=qty; else if(op==='مرتجع') entry.returned+=qty; else if(op==='صرف') entry.expensed+=qty; else if(op==='مبيعات') entry.sold+=qty;
+    if (!map.has(item)) map.set(item, { item, withdrawn:0, returned:0, expensed:0, sold:0 });
+    const entry = map.get(item);
+    const qty = Number(row[2]) || 0;
+    const operation = String(row[3] || '').trim();
+    if (operation === 'سحب') entry.withdrawn += qty;
+    else if (operation === 'مرتجع') entry.returned += qty;
+    else if (operation === FESTIVAL_MOVEMENT_EXPENSE_OP) entry.expensed += qty;
+    else if (operation === FESTIVAL_MOVEMENT_SALE_OP) entry.sold += qty;
   });
-  return Array.from(map.values()).map(e=>({...e,remaining:e.withdrawn-e.returned-e.expensed-e.sold}));
+
+  return Array.from(map.values()).map(e => ({ ...e, remaining: e.withdrawn - e.returned - e.expensed - e.sold }));
 }
 
-function addFestivalMovement(payload, actor) {
+// سجل يدوي لسحب/مرتجع مواد مرتبط بالمستخدم الحالي (وليس بتقرير معيّن بالضرورة)، مع رقم فاتورة اختياري.
+function addFestivalMovement(payload) {
   payload = payload || {};
   const createdById = String(payload.createdById || '').trim();
   if (!createdById) throw new Error('تعذر تحديد هوية المستخدم');
   const createdByName = String(payload.createdByName || '').trim();
-  if (!actor || createdById !== String(actor.id) || createdByName !== String(actor.name)) {
-    throw new Error('لا يمكنك تسجيل حركة باسم مستخدم آخر');
-  }
   const reportId = String(payload.reportId || '').trim(); // اختياري: يبقى فارغاً للحركات اليدوية
 
   const items = Array.isArray(payload.items) ? payload.items : [];
@@ -1164,7 +1542,7 @@ function addFestivalMovement(payload, actor) {
 
   const sheet = ensureFestivalMovementSheet();
   sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, FESTIVAL_MOVEMENT_HEADERS.length).setValues(rows);
-  invalidateMovementCache(String(payload.createdById || '').trim());
+  cache.remove(FESTIVAL_MOVEMENTS_CACHE_KEY);
 
   return { status:'success', added: rows.length };
 }
@@ -1174,36 +1552,44 @@ function addFestivalMovement(payload, actor) {
 // عند تعديل تقرير موجود، تُستبدل حركات "صرف" السابقة لنفس التقرير بالقيم الجديدة (بدون تكرار).
 function syncReportExpensesToFestivalMovement(reportData) {
   reportData = reportData || {};
-  const reportId=String(reportData.id||'').trim();
-  if(!reportId) return;
-  const ownerId=String(reportData.createdById||'').trim(), ownerName=String(reportData.createdByName||'').trim();
-  const expenses=Array.isArray(reportData.expenses)?reportData.expenses:[];
-  const sheet=ensureFestivalMovementSheet();
-  const lastRow=sheet.getLastRow();
-  if(lastRow>1){
-    const existing=sheet.getRange(2,1,lastRow-1,FESTIVAL_MOVEMENT_HEADERS.length).getValues();
-    const rowsToClear=[];
-    existing.forEach((row,i)=>{ if(String(row[0]).trim()===reportId && String(row[3]).trim()===FESTIVAL_MOVEMENT_EXPENSE_OP) rowsToClear.push(i+2); });
-    if(rowsToClear.length){
-      sheet.getRangeList(rowsToClear.map(r=>'A'+r+':'+String.fromCharCode(64+FESTIVAL_MOVEMENT_HEADERS.length)+r)).clearContent();
-    }
+
+  const reportId = String(reportData.id || '').trim();
+  if (!reportId) return;
+
+  const ownerId = String(reportData.createdById || '').trim();
+  const ownerName = String(reportData.createdByName || '').trim();
+  const expenses = Array.isArray(reportData.expenses) ? reportData.expenses : [];
+
+  const sheet = ensureFestivalMovementSheet();
+  const lastRow = sheet.getLastRow();
+  const existingRows = lastRow > 1 ? sheet.getRange(2,1,lastRow-1,FESTIVAL_MOVEMENT_HEADERS.length).getValues() : [];
+
+  // إزالة أي حركات "صرف" مسجلة سابقاً لنفس التقرير (لتفادي تكرارها عند التعديل).
+  const kept = existingRows.filter(row => !(String(row[0]).trim() === reportId && String(row[3]).trim() === FESTIVAL_MOVEMENT_EXPENSE_OP));
+
+  const now = new Date();
+  const newExpenseRows = expenses
+    .map(e => ({ item: String((e && e.item) || '').trim(), quantity: Number(e && e.quantity) || 0 }))
+    .filter(e => e.item && e.quantity > 0)
+    .map(e => [reportId, e.item, e.quantity, FESTIVAL_MOVEMENT_EXPENSE_OP, now, ownerId, ownerName, '']);
+
+  const finalRows = kept.concat(newExpenseRows);
+
+  sheet.clearContents();
+  sheet.getRange(1,1,1,FESTIVAL_MOVEMENT_HEADERS.length).setValues([FESTIVAL_MOVEMENT_HEADERS]);
+  if (finalRows.length) {
+    sheet.getRange(2,1,finalRows.length,FESTIVAL_MOVEMENT_HEADERS.length).setValues(finalRows);
   }
-  const now=new Date();
-  const newRows=expenses.map(e=>({item:String(e&&e.item||'').trim(),quantity:Number(e&&e.quantity)||0})).filter(e=>e.item&&e.quantity>0).map(e=>[reportId,e.item,e.quantity,FESTIVAL_MOVEMENT_EXPENSE_OP,now,ownerId,ownerName,'']);
-  if(newRows.length) sheet.getRange(sheet.getLastRow()+1,1,newRows.length,FESTIVAL_MOVEMENT_HEADERS.length).setValues(newRows);
-  invalidateMovementCache(ownerId);
+  cache.remove(FESTIVAL_MOVEMENTS_CACHE_KEY);
 }
 
 // تُستدعى يدوياً فقط (زر "إرسال صافي المحصلة إلى المبيعات") لكل مادة معها صافٍ موجب:
 // تُضاف حركة "مبيعات" بقيمة الصافي الحالي بالضبط، فتصبح محصلة تلك المادة صفراً فور الإرسال.
-function closeOutUserTallyToSales(payload, actor) {
+function closeOutUserTallyToSales(payload) {
   payload = payload || {};
   const createdById = String(payload.createdById || '').trim();
   if (!createdById) throw new Error('تعذر تحديد هوية المستخدم');
   const createdByName = String(payload.createdByName || '').trim();
-  if (!actor || createdById !== String(actor.id) || createdByName !== String(actor.name)) {
-    throw new Error('لا يمكنك تصفير محصلة مستخدم آخر');
-  }
   const selectedReportId = String(payload.reportId || '').trim();
   if (!selectedReportId) throw new Error('يرجى اختيار التقرير الذي ستضاف إليه المبيعات');
 
@@ -1256,7 +1642,7 @@ function closeOutUserTallyToSales(payload, actor) {
   sheet.getRange(sheet.getLastRow() + 1, 1, movementRows.length, FESTIVAL_MOVEMENT_HEADERS.length).setValues(movementRows);
 
   SpreadsheetApp.flush();
-  invalidateMovementCache(createdById);
   cache.remove('allReports_v3_user_history');
+  cache.remove(FESTIVAL_MOVEMENTS_CACHE_KEY);
   return { status:'success', added: movementRows.length, salesAdded: salesRows.length, reportId: selectedReportId };
 }

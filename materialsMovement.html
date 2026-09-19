@@ -37,10 +37,16 @@
                     <li class="nav-item">
                         <a class="nav-link nav-link-movement active" href="materialsMovement.html">سحب / مرتجع مواد</a>
                     </li>
+                    <li class="nav-item"><a class="nav-link nav-link-attendance" href="attendance.html">الدوام</a></li>
+                    <li class="nav-item"><a class="nav-link nav-link-dashboard" href="dashboard.html">التحليلات</a></li>
+                    
                 </ul>
                 <div class="d-flex align-items-center me-auto">
                     <button type="button" class="btn btn-sm btn-outline-primary me-2" data-refresh-cache title="جلب أحدث البيانات من Google Sheets">
                         <i class="fa-solid fa-arrows-rotate me-1"></i>تحديث البيانات
+                    </button>
+                    <button type="button" class="dark-mode-toggle me-2" id="darkModeToggle" title="تبديل الوضع الداكن/الفاتح">
+                        <i class="fa-solid fa-moon"></i><i class="fa-solid fa-sun"></i>
                     </button>
                     <span id="welcomeMessage" class="navbar-text me-3"></span>&nbsp;&nbsp;
                     <button id="logoutBtn" class="btn btn-sm btn-outline-danger"><i class="fa-solid fa-sign-out-alt me-1"></i>تسجيل الخروج</button>
@@ -49,6 +55,7 @@
         </div>
     </nav>
     <!-- =========== NAVBAR END =========== -->
+    <div id="offline-status" class="position-fixed top-0 start-50 translate-middle-x mt-2 px-3 py-2 rounded-pill shadow-sm small fw-bold" style="z-index:1080;display:none;"></div>
 
     <div id="toast-notification" class="toast-container">
         <div class="toast-message"></div>
@@ -62,25 +69,22 @@
             </div>
             <div class="card-body">
                 <div class="alert alert-info py-2 mb-0">
-                    كل مستخدم يرى سحبه ومرتجعه ومحصلته الخاصة. <strong>حسابات المدير</strong> ترى تلقائياً تقارير
-                    ومحصلة كل الموظفين الذين يتبعون له (حسب شجرة "المسؤول المباشر" في ورقة Employees)، بالإضافة
-                    إلى بياناته الشخصية. أما زر "إرسال صافي المحصلة إلى المبيعات" فيُصفّر محصلتك الشخصية فقط دوماً،
-                    ولا يؤثر على محصلة أي شخص آخر حتى لو كنت تشاهد بيانات فريقك.
-                    عند حفظ أي تقرير يحتوي على مصاريف، تُطرح كميات المصاريف تلقائياً من محصلة صاحب التقرير
-                    (تظهر في السجل كحركة "صرف (تلقائي)").
+                    كل ما تسجّله هنا مرتبط بحسابك أنت: كل مستخدم يرى فقط سحبه ومرتجعه ومحصلة المواد الباقية معه.
+                    عند حفظ أي تقرير يحتوي على مصاريف، تُطرح كميات المصاريف تلقائياً
+                    من محصلتك (تظهر في السجل كحركة "صرف (تلقائي)"). أما إرسال صافي المحصلة إلى المبيعات يتم <strong>يدوياً</strong>: عند الضغط على الزر تختار التقرير الذي ستضاف إليه هذه المبيعات.
+                </div>
+                <div id="movementEmployeeFilterWrap" class="mt-3 d-none">
+                    <label for="movementEmployeeFilterSelect" class="form-label mb-1 fw-bold">عرض بيانات:</label>
+                    <select id="movementEmployeeFilterSelect" class="form-select form-select-sm" style="max-width:320px;"></select>
                 </div>
                 <div id="reportInfoBox" class="alert alert-success mt-3"></div>
-                <div class="mb-3" id="movementEmployeeFilterWrap" style="display:none">
-                    <label for="movementEmployeeFilter" class="form-label">عرض محصلة الموظف</label>
-                    <select id="movementEmployeeFilter" class="form-select"><option value="">كل الموظفين</option></select>
-                </div>
             </div>
         </div><br/>
 
         <div id="movementWorkArea">
 
             <!-- Movement entry card -->
-            <div class="card form-card">
+            <div id="movementEntryCard" class="card form-card">
                 <div class="card-header collapsible-header" data-bs-toggle="collapse" data-bs-target="#collapseMovementEntry">
                     <span><i class="fa-solid fa-right-left me-2"></i>تسجيل سحب / مرتجع مواد</span>
                     <i class="fa-solid fa-chevron-up collapse-icon"></i>
@@ -143,10 +147,10 @@
                     <div class="table-responsive">
                         <table class="table table-bordered mb-0">
                             <thead class="table-light">
-                                <tr><th>الموظف</th><th>المادة</th><th>إجمالي السحب</th><th>إجمالي المرتجع</th><th>إجمالي الصرف (تلقائي من جميع التقارير)</th><th>إجمالي المبيعات المُرسَلة</th><th>المتبقي (الصافي)</th></tr>
+                                <tr><th>المادة</th><th>إجمالي السحب</th><th>إجمالي المرتجع</th><th>إجمالي الصرف (تلقائي من جميع التقارير)</th><th>إجمالي المبيعات المُرسَلة</th><th>المتبقي معي (الصافي)</th></tr>
                             </thead>
                             <tbody id="inventory-summary-body">
-                                <tr><td colspan="7" class="text-center text-muted">لا توجد بيانات بعد</td></tr>
+                                <tr><td colspan="6" class="text-center text-muted">لا توجد بيانات بعد</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -213,7 +217,8 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="script.js"></script>
+    <script src="core.js"></script>
+    <script src="page-movement.js"></script>
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => navigator.serviceWorker.register('./service-worker.js').catch(console.warn));
