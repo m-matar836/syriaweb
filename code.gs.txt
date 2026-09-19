@@ -2,7 +2,14 @@
 // Code.gs - updated to sync edited sales prices back to Products
 // ===============================================================
 
-const aSheet = SpreadsheetApp.getActiveSpreadsheet();
+// ====================== التهيئة: معرّف الـ Sheet ======================
+// ضع هنا معرّف ملف الـ Google Sheet (الجزء من الرابط بعد /d/ وقبل /edit)
+// مثال: https://docs.google.com/spreadsheets/d/1AbC123dEfG...XYZ/edit  ⇒  المعرّف هو 1AbC123dEfG...XYZ
+// إذا تركته فارغاً، سيستخدم الـ Spreadsheet المرتبط بالسكربت تلقائياً.
+const SPREADSHEET_ID = "";
+const aSheet = SPREADSHEET_ID ? SpreadsheetApp.openById(SPREADSHEET_ID) : SpreadsheetApp.getActiveSpreadsheet();
+// =====================================================================
+
 const reportsSheet = aSheet.getSheetByName("Reports");
 const salesSheet = aSheet.getSheetByName("sales");
 const salesOfCompetitorSheet = aSheet.getSheetByName("salesOfCompetitor");
@@ -36,6 +43,7 @@ function doGet(e) {
       case "getAttendance": response = getAttendance(e.parameter.userId, e.parameter.role, e.parameter.userName, e.parameter.targetUserId); break;
       case "getStatusOptions": response = getStatusOptions(); break;
       case "getDashboardData": response = getDashboardData(e.parameter.userId, e.parameter.role); break;
+      case "debugDeploy": response = debugDeploy(); break;
       default: response = {status:"error", message:"Invalid GET Action"};
     }
     return createJsonResponse(response);
@@ -275,13 +283,33 @@ function getAttendance(userId, userRole, userName, targetUserId) {
     }));
 }
 
+// فحص سريع: يكشف أي سبريدشيت فعلياً مربوط مع النسخة المنشورة على الرابط.
+function debugDeploy() {
+  try {
+    const ss = aSheet;
+    const emp = ss.getSheetByName("Employees");
+    const hasUsers = ss.getSheetByName("Users") !== null;
+    return {
+      status: "success",
+      configuredId: SPREADSHEET_ID || "(فارغ - يستخدم المرتبط بالسكربت)",
+      spreadsheetName: ss.getName(),
+      spreadsheetUrl: ss.getUrl(),
+      employeesExists: emp !== null,
+      employeesRows: emp ? (emp.getLastRow() - 1) : 0,
+      usersSheetExists: hasUsers
+    };
+  } catch (err) {
+    return { status: "error", message: "تعذّر فتح الـ Spreadsheet: " + err.message };
+  }
+}
+
 function doLogin(payload) {
   const sheet = aSheet.getSheetByName("Employees");
   if (!sheet || sheet.getLastRow() < 2) throw new Error("لا توجد بيانات موظفين");
   // الأعمدة: A=id(0)، B=name(1)، C=username(2)، D=password(3)، E=role(4) ...
   const usersData = sheet.getRange(2,1,sheet.getLastRow()-1,7).getValues();
-  const inputUsernameLower = String(payload.username || '').toLowerCase();
-  const inputPassword = String(payload.password || '');
+  const inputUsernameLower = String(payload.username || '').trim().toLowerCase();
+  const inputPassword = String(payload.password || '').trim();
 
   // V42: تحقق آمن من كلمة المرور.
   // 1) إذا كانت المخزنة بصيغة hash (تبدأ بـ "pwd$") نقارن بالـ hash.
@@ -289,8 +317,8 @@ function doLogin(payload) {
   //    حتى لا تبقى أي كلمة مرور نصية في الـ Sheet.
   for (let i = 0; i < usersData.length; i++) {
     const row = usersData[i];
-    if (String(row[2]).toLowerCase() !== inputUsernameLower) continue;
-    const stored = String(row[3] || '');
+    if (String(row[2]).trim().toLowerCase() !== inputUsernameLower) continue;
+    const stored = String(row[3] || '').trim();
     if (!stored) continue;
     let valid = false;
     if (stored.indexOf('pwd$') === 0) {

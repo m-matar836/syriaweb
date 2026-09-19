@@ -84,7 +84,7 @@ function forceLogout(message) {
     window.location.href = 'index.html';
 }
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyuSsEnXYcYqtHyOqPn1GQDo7Jax8tYzeXQ0R8dnE14WCIMdZavSacfqPn-c5WZj8-9/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxnVIJZwvLW9rsjgH-Ea1cG6fVqAXWaCOqfa94TpAF2ueiFW-Rraiwozm0rDScxFN9y/exec";
 const CACHE_DURATION_MINUTES = 1440;
 const FORM_STATE_KEY = 'reportFormLastState'; 
 const EDIT_STATE_KEY = 'reportToEdit';
