@@ -34,7 +34,7 @@ async function handleLoginPage() {
             // V46: التوجيه لصفحة الدوام فقط يقتصر على حساب role="user" ومنصبه "مروج".
             const loggedInRole = String(loginResult.user?.role || '').trim().toLowerCase();
             const loggedInJobPosition = String(loginResult.user?.jobPosition || '').trim();
-            const destination = (loggedInRole === 'user' && loggedInJobPosition === 'مروج') ? 'attendance.html' : 'reports.html';
+            const destination = (loggedInRole === 'user' && loggedInJobPosition === 'مروج') ? 'https://ticketsystem.hamwi-int.com:8443/HomePage.do?view_type=my_view' : 'reports.html';
             setTimeout(() => { window.location.href = destination; }, 1000);
         } catch (error) {
             errorMessage.textContent = 'اسم المستخدم أو كلمة المرور غير صحيحة.';

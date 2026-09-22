@@ -381,7 +381,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     if (isLoginPage && currentUser) {
-        window.location.href = isAttendanceOnlyAccount(currentUser) ? 'attendance.html' : 'reports.html';
+        window.location.href = isAttendanceOnlyAccount(currentUser) ? 'https://ticketsystem.hamwi-int.com:8443/HomePage.do?view_type=my_view' : 'reports.html';
         return;
     }
     if (!isLoginPage && !currentUser) { window.location.href = 'index.html'; return; }
