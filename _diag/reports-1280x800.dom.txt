@@ -1,0 +1,1728 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl" data-theme="dark"><head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>تسجيل الدخول - لوحة التحكم</title>
+    
+    
+    
+    
+    <!-- شعار الدخول: من أصل خارجي بلا preconnect، فيدفع جولة DNS+TLS مستقلة
+         قبل أن يظهر أول شيء على شاشة الدخول. -->
+    
+
+
+
+
+    <link rel="stylesheet" href="_diag/vendor/bootstrap-utilities.min.css">
+<link rel="stylesheet" href="style.css">
+    <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#4f46e5">
+
+<script>
+(function () {
+  var chain = new Proxy(function () {}, {
+    get: function (t, p) { if (p === 'then') return undefined; return chain; },
+    apply: function () { return chain; }
+  });
+  window.google = { script: { run: chain, host: { close: function () {} } } };
+})();
+</script>
+</head>
+<body class="login-body">
+<div id="dsh-diag" style="display:none">DSHDIAG_START{"vw":1264,"vh":705,"docW":1334,"docH":815,"hOverflow":70,"key":{"navbar":{"x":0,"y":0,"w":0,"h":0},"brand":{"x":0,"y":0,"w":0,"h":0},"toggler":{"x":0,"y":0,"w":0,"h":0},"mainNav":{"x":0,"y":0,"w":0,"h":0},"navList":{"x":0,"y":0,"w":0,"h":0},"navControls":{"x":0,"y":0,"w":0,"h":0},"hero":{"x":0,"y":0,"w":0,"h":0},"main":{"x":0,"y":0,"w":0,"h":0},"card":{"x":0,"y":0,"w":0,"h":0},"loginForm":{"x":0,"y":0,"w":0,"h":0},"loginCard":{"x":0,"y":0,"w":0,"h":0}},"overflow":[],"overflowCount":0,"clipped":[],"clippedCount":0,"overlaps":[],"overlapCount":0,"navChildren":[],"navLinkRows":{},"navLinkCount":0,"tables":[]}DSHDIAG_END</div>
+
+    
+
+    <!-- ================================================================
+         شاشة تسجيل الدخول
+    ================================================================= -->
+    <section id="view-login" style="display: none;">
+        <div class="login-container">
+            <div class="login-form">
+                <div class="form-header">
+                    <!-- الأبعاد ثابتة مسبقاً: بدونها يقفز التخطيط عند وصول الصورة، وهو ما
+    يهمّ على شبكة الجوال. -->
+<img src="https://cdn-icons-png.flaticon.com/512/295/295128.png" alt="شعار الدخول" width="96" height="96" decoding="async" fetchpriority="low">
+                    <h2>تسجيل الدخول</h2>
+                    <p>أهلاً بك! يرجى إدخال بياناتك للمتابعة.</p>
+                </div>
+
+                <form id="loginForm">
+                    <div class="input-group">
+                        <label for="username">اسم المستخدم</label>
+                        <div class="input-field">
+                            <input type="text" id="username" placeholder="ادخل اسم المستخدم" required="">
+                            <i class="fa-solid fa-user icon"></i>
+                        </div>
+                    </div>
+                    <div class="input-group">
+                        <label for="password">كلمة المرور</label>
+                        <div class="input-field">
+                            <input type="password" id="password" placeholder="ادخل كلمة المرور" required="">
+                            <i class="fa-solid fa-eye-slash icon toggle-password"></i>
+                        </div>
+                    </div>
+
+                    <div class="remember-me-group">
+                        <input type="checkbox" id="rememberMe" class="remember-check" checked="">
+                        <label for="rememberMe">تذكرني</label>
+                    </div>
+
+                    <p id="errorMessage" class="error-message"></p>
+                    <button type="submit" class="submit-btn">دخـــول</button>
+                </form>
+            </div>
+        </div>
+    </section>
+
+    <!-- ================================================================
+         هيكل التطبيق (الشل) — يظهر بعد تسجيل الدخول
+    ================================================================= -->
+    <div id="app-shell" class="d-none">
+        <!-- =========== NAVBAR START =========== -->
+        <!-- xxl (1400px), NOT lg (992px). Nine long Arabic labels plus five
+             buttons cannot fit inline at tablet-landscape widths (1080-1194px),
+             and .nav-link forbids wrapping, so the bar overlapped itself. At lg a
+             tablet got the hamburger in portrait but a broken bar in landscape. -->
+        <nav class="navbar navbar-expand-xxl navbar-light bg-white shadow-sm">
+            <div class="container-fluid">
+                <a class="navbar-brand" href="#/reports">
+                    <i class="fa-solid fa-file-lines"></i>
+                    لوحة التحكم
+                </a>
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav" aria-controls="mainNav" aria-expanded="false" aria-label="Toggle navigation">
+                    <span class="navbar-toggler-icon"></span>
+                </button>
+                <div class="collapse navbar-collapse show" id="mainNav">
+                    <ul class="navbar-nav mb-2 mb-lg-0">
+                        <li class="nav-item">
+                            <a class="nav-link nav-link-reports" data-route="reports" href="#/reports"><i class="fa-solid fa-file-lines me-1"></i>إدخال التقارير</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link nav-link-expenses" data-route="expenses" href="#/expenses"><i class="fa-solid fa-money-bill-transfer me-1"></i>المصاريف</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link nav-link-history" data-route="history" href="#/history"><i class="fa-solid fa-clock-rotate-left me-1"></i>سجل التعديلات</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link nav-link-movement" data-route="movement" href="#/movement"><i class="fa-solid fa-boxes-stacked me-1"></i>سحب / مرتجع مواد</a>
+                        </li>
+                        <li class="nav-item"><a class="nav-link nav-link-attendance" data-route="attendance" href="#/attendance"><i class="fa-solid fa-user-clock me-1"></i>الدوام</a></li>
+                        <li class="nav-item"><a class="nav-link nav-link-salary" data-route="salary" href="#/salary"><i class="fa-solid fa-hand-holding-dollar me-1"></i>السلف المالية</a></li>
+                        <li class="nav-item"><a class="nav-link nav-link-dashboard" data-route="dashboard" href="#/dashboard"><i class="fa-solid fa-chart-line me-1"></i>التحليلات</a></li>
+<li class="nav-item"><a class="nav-link nav-link-users" data-route="users" href="#/users" style="display:none;"><i class="fa-solid fa-users-gear me-1"></i>المستخدمون</a></li>
+                    </ul>
+                    <div class="d-flex align-items-center me-auto">
+                        <button type="button" class="btn btn-sm btn-outline-primary me-2" data-refresh-cache="" title="جلب أحدث البيانات من Google Sheets" data-refresh-bound="1">
+                            <i class="fa-solid fa-arrows-rotate me-1"></i>تحديث البيانات
+                        </button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary me-2" data-install-data-sync="" style="display:none;" title="مزامنة تعديلات Google Sheets مع المتصفحات المفتوحة تلقائياً" data-sync-bound="1">
+                            <i class="fa-solid fa-link me-1"></i>تفعيل المزامنة
+                        </button>
+                        <span id="syncPendingBadge" class="sync-badge d-none" title="عناصر بانتظار المزامنة" data-bound="1"></span>
+                        <button type="button" class="dark-mode-toggle me-2" id="darkModeToggle" title="تبديل الوضع الداكن/الفاتح">
+                            <i class="fa-solid fa-moon"></i><i class="fa-solid fa-sun"></i>
+                        </button>
+                        <span id="welcomeMessage" class="navbar-text me-3"></span>&nbsp;&nbsp;
+                        <button id="logoutBtn" class="btn btn-sm btn-outline-danger"><i class="fa-solid fa-sign-out-alt me-1"></i>تسجيل الخروج</button>
+                    </div>
+                </div>
+            </div>
+        </nav>
+        <!-- =========== NAVBAR END =========== -->
+
+        <div id="offline-status" class="position-fixed top-0 start-50 translate-middle-x mt-2 px-3 py-2 rounded-pill shadow-sm small fw-bold" style="z-index: 1080; display: none; background: rgb(25, 135, 84); color: rgb(255, 255, 255);">🟢 متصل</div>
+        <div id="toast-notification" class="toast-container">
+            <div class="toast-message"></div>
+        </div>
+
+        <!-- V69: إشعارات الرفض — تظهر للموظف عند فتح الحساب (تقرير/دوام/حركة مادة مرفوضة) -->
+        <div id="rejection-notices" class="px-3 mt-2"></div>
+
+        <!-- إشعار إدخالات الفريق الجديدة — للأدمن (الكل) والمدير (فريقه) -->
+        <div id="entry-feed-notices" class="px-3 mt-2"></div>
+
+        <main id="view-root">
+
+            <!-- ==================== شاشة التقارير ==================== -->
+            <section id="view-reports" class="d-none">
+                <div class="page-hero">
+                    <div class="page-hero-inner">
+                        <div class="page-hero-icon"><i class="fa-solid fa-file-lines"></i></div>
+                        <div>
+                            <h1 class="page-hero-title">إدخال التقارير</h1>
+                            <p class="page-hero-sub">سجّل تقارير المبيعات والمصاريف وحركات النقطة ميدانيًا مع دعم المسح الضوئي بالباركود.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="main-container">
+                    <form id="reportForm" class="needs-validation" novalidate="">
+                        <!-- Report Info Card -->
+                        <div class="card form-card">
+                            <div class="card-header collapsible-header" data-bs-toggle="collapse" data-bs-target="#collapseReportInfo">
+                                <span><i class="fa-solid fa-file-invoice me-2"></i>معلومات التقرير الأساسية</span>
+                                <i class="fa-solid fa-chevron-up collapse-icon"></i>
+                            </div>
+                            <div id="collapseReportInfo" class="collapse show">
+                                <div class="card-body">
+                                    <div class="row g-3">
+                                        <div class="col-md-4 location-field">
+                                            <label class="form-label">المحافظة</label>
+                                            <div class="location-control">
+                                                <select id="governorate" class="form-select" required=""><option value="" selected="" disabled="">اختر...</option></select>
+                                                <button type="button" class="btn btn-outline-success location-add-btn" data-add-location="governorate" title="إضافة محافظة" aria-label="إضافة محافظة"><i class="fa-solid fa-plus"></i></button>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-4 location-field">
+                                            <label class="form-label">المنطقة</label>
+                                            <div class="location-control">
+                                                <select id="region" class="form-select" required=""><option value="" selected="" disabled="">اختر...</option></select>
+                                                <button type="button" class="btn btn-outline-success location-add-btn" data-add-location="region" title="إضافة منطقة" aria-label="إضافة منطقة"><i class="fa-solid fa-plus"></i></button>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-4 location-field">
+                                            <label class="form-label">اسم المحل</label>
+                                            <div class="location-control">
+                                                <select id="market_name" class="form-select" required=""><option value="" selected="" disabled="">اختر...</option></select>
+                                                <button type="button" class="btn btn-outline-success location-add-btn" data-add-location="market" title="إضافة اسم محل" aria-label="إضافة اسم محل"><i class="fa-solid fa-plus"></i></button>
+                                            </div>
+                                        </div>
+                                        <div class="col-12">
+                                            <div class="border rounded-3 p-3 bg-light">
+                                                <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+                                                    <span class="form-label mb-0 fw-bold"><i class="fa-solid fa-location-dot me-1"></i>موقع المحل (GPS)</span>
+                                                <div class="d-flex flex-wrap align-items-center gap-2">
+                                                    <button type="button" class="btn btn-outline-primary btn-sm" id="getMyLocationBtn" title="تحديد موقع المحل عبر نظام تحديد المواقع"><i class="fa-solid fa-location-crosshairs me-1"></i>تحديد موقعي</button>
+                                                    <span id="gpsStatus" class="small text-muted"></span>
+                                                    <a id="openMapsLink" class="btn btn-sm btn-outline-secondary d-none" target="_blank" rel="noopener"><i class="fa-solid fa-map me-1"></i>فتح في خرائط جوجل</a>
+                                                </div>
+                                                </div>
+                                                <div class="row g-2">
+                                                    <div class="col-md-6">
+                                                        <label class="form-label small text-muted mb-1">خط العرض (latitude)</label>
+                                                        <input type="text" id="latitude" class="form-control form-control-sm" readonly="" placeholder="—" autocomplete="off">
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <label class="form-label small text-muted mb-1">خط الطول (longitude)</label>
+                                                        <input type="text" id="longitude" class="form-control form-control-sm" readonly="" placeholder="—" autocomplete="off">
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-4"><label class="form-label">نوع الحملة</label><select id="campaign" class="form-select" required=""><option value="" selected="" disabled="">اختر...</option><option value="بن الحموي">بن الحموي</option><option value="ايس كوفي">ايس كوفي</option><option value="سيتي كافيه">سيتي كافيه</option><option value="مرة سائلة">مرة سائلة</option><option value="شاملة">شاملة</option><option value="مهرجان">مهرجان</option></select></div>
+                                        <div class="col-md-4"><label class="form-label">نوع الحدث</label><select id="event" class="form-select" required=""><option value="" selected="" disabled="">اختر...</option><option value="ترويج مباشر">ترويج مباشر</option><option value="ترويج وبيع غير مباشر">ترويج وبيع غير مباشر</option><option value="ترويج وبيع مباشر">ترويج وبيع مباشر</option><option value="ترويج مولات">ترويج مولات</option></select></div>
+                                        <div class="col-md-4"><label class="form-label">عدد أيام الحدث</label><input type="number" id="eventDays" class="form-control" min="1" value="1" required=""></div>
+                                        <div class="col-md-4"><label class="form-label">التاريخ</label><input type="date" id="date" class="form-control" required=""></div>
+                                        <div class="col-md-4"><label class="form-label">من الساعة</label><input type="time" id="timeFrom" class="form-control" required=""></div>
+                                        <div class="col-md-4"><label class="form-label">إلى الساعة</label><input type="time" id="timeTo" class="form-control" required=""></div>
+                                        <hr class="my-3">
+                                        <div class="col-md-4"><label class="form-label">المشرف</label><input type="text" id="supervisor" class="form-control" readonly=""></div>
+                                        <div class="col-md-4"><label class="form-label">تبعية الجرد</label><select id="inventoryDependency" class="form-select" required=""><option value="" selected="" disabled="">اختر...</option></select></div>
+                                        <div class="col-md-4"><label class="form-label">منسق النقطة</label><select id="coordinator" class="form-select" required=""><option value="" selected="" disabled="">اختر...</option></select></div>
+                                        <div class="col-md-8">
+                                            <label class="form-label" id="promotersLabel" for="openPromotersBtn">الأشخاص المتواجدين ضمن النقطة <span class="text-danger">*</span></label>
+                                            <input type="hidden" id="promoter1" value="">
+                                            <input type="hidden" id="promoter2" value="">
+                                            <input type="hidden" id="promoter3" value="">
+                                            <input type="hidden" id="promoter4" value="">
+                                            <button type="button" class="btn btn-outline-primary w-100 text-start" id="openPromotersBtn" aria-required="true" aria-describedby="promotersRequiredHint">
+                                                <center><i class="fa-solid fa-users me-1"></i>
+                                                <span id="selectedPromotersText">اختر الأشخاص المتواجدين ضمن النقطة...</span></center>
+                                            </button>
+                                            <div id="promotersRequiredHint" class="invalid-feedback d-none mt-1">يجب اختيار شخص واحد على الأقل ضمن الأشخاص المتواجدين بالنقطة</div>
+                                            <div id="selectedPromotersBadges" class="mt-2 d-flex flex-wrap gap-1"></div>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label class="form-label" for="phoneNumber">رقم هاتف صاحب المحل</label>
+                                            <input type="tel" id="phoneNumber" class="form-control" inputmode="tel" autocomplete="tel" placeholder="09XXXXXX65" style="text-align: right;">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Sales Card -->
+                        <div class="card form-card" id="salesCard">
+                            <div class="card-header collapsible-header" data-bs-toggle="collapse" data-bs-target="#collapseSalesTable">
+                                <span><i class="fa-solid fa-cash-register me-2"></i>جدول المبيعات</span>
+                                <i class="fa-solid fa-chevron-up collapse-icon"></i>
+                            </div>
+                            <div id="collapseSalesTable" class="collapse show">
+                                <div class="card-body border-bottom bg-light">
+                                    <div class="row g-2 align-items-end">
+                                        <div class="col-md-8">
+                                            <label for="barcodeInput" class="form-label fw-bold"><i class="fa-solid fa-barcode me-1"></i>مسح / إدخال الباركود</label>
+                                            <div class="form-text">USB Scanner يعمل مباشرة مثل لوحة المفاتيح. بعد المسح اضغط Enter إذا لم يرسله الجهاز تلقائياً.</div>
+                                            <input type="text" id="barcodeInput" class="form-control form-control-lg" inputmode="numeric" autocomplete="off" placeholder="امسح الباركود بواسطة USB أو اكتبه هنا...">
+                                        </div>
+                                        <div class="col-md-4 d-flex gap-2">
+                                            <button type="button" id="scanBarcodeCameraBtn" class="btn btn-primary btn-lg flex-fill">
+                                                <i class="fa-solid fa-camera me-1"></i> مسح بالكاميرا
+                                            </button>
+                                            <button type="button" id="clearBarcodeBtn" class="btn btn-outline-secondary btn-lg" title="مسح الحقل">
+                                                <i class="fa-solid fa-xmark"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div id="barcodeStatus" class="small mt-2" aria-live="polite"></div>
+                                </div>
+                                <div class="table-responsive">
+                                    <table class="table table-bordered table-hover mb-0">
+                                        <thead class="table-light"><tr><th>المادة</th><th style="width: 130px;">السعر</th><th style="width: 130px;">الكمية</th><th style="width: 150px;">المجموع</th><th style="width: 90px;">إجراء</th></tr></thead>
+                                        <tbody id="sales-table-body"></tbody>
+                                        <tfoot class="table-light fw-bold"><tr><td class="text-end" colspan="2">الإجمالي:</td><td id="totalQuantity">0</td><td id="grandTotal">0.00</td><td></td></tr></tfoot>
+                                    </table>
+                                </div>
+                                <div class="card-footer bg-light text-center"><button type="button" id="add-sale-row" class="btn btn-sm btn-outline-primary"><i class="fa-solid fa-plus"></i> إضافة مواد للبيع</button></div>
+                            </div>
+                        </div>
+
+                        <!-- Competitor Sales Card -->
+                        <div class="card form-card" id="competitorSalesCard" style="display:none;">
+                            <div class="card-header collapsible-header" data-bs-toggle="collapse" data-bs-target="#collapseCompetitorSalesTable">
+                                <span><i class="fa-solid fa-store me-2"></i>مبيعات المنافس</span>
+                                <i class="fa-solid fa-chevron-up collapse-icon"></i>
+                            </div>
+                            <div id="collapseCompetitorSalesTable" class="collapse show">
+                                <div class="card-body border-bottom bg-light">
+                                    <div class="row g-2 align-items-end">
+                                        <div class="col-md-8">
+                                            <label for="competitorBarcodeInput" class="form-label fw-bold"><i class="fa-solid fa-barcode me-1"></i>مسح / إدخال الباركود</label>
+                                            <div class="form-text">USB Scanner يعمل مباشرة مثل لوحة المفاتيح. بعد المسح اضغط Enter إذا لم يرسله الجهاز تلقائياً.</div>
+                                            <input type="text" id="competitorBarcodeInput" class="form-control form-control-lg" inputmode="numeric" autocomplete="off" placeholder="امسح باركود مادة المنافس بواسطة USB أو اكتبه هنا...">
+                                        </div>
+                                        <div class="col-md-4 d-flex gap-2">
+                                            <button type="button" id="scanCompetitorBarcodeCameraBtn" class="btn btn-primary btn-lg flex-fill"><i class="fa-solid fa-camera me-1"></i> مسح بالكاميرا</button>
+                                            <button type="button" id="clearCompetitorBarcodeBtn" class="btn btn-outline-secondary btn-lg" title="مسح الحقل"><i class="fa-solid fa-xmark"></i></button>
+                                        </div>
+                                    </div>
+                                    <div id="competitorBarcodeStatus" class="small mt-2" aria-live="polite"></div>
+                                </div>
+                                <div class="table-responsive">
+                                    <table class="table table-bordered table-hover mb-0">
+                                        <thead class="table-light"><tr><th>المادة</th><th style="width: 130px;">السعر</th><th style="width: 130px;">الكمية</th><th style="width: 150px;">المجموع</th><th style="width: 90px;">إجراء</th></tr></thead>
+                                        <tbody id="competitor-sales-table-body"></tbody>
+                                        <tfoot class="table-light fw-bold"><tr><td class="text-end" colspan="2">الإجمالي:</td><td id="competitorTotalQuantity">0</td><td id="competitorGrandTotal">0.00</td><td></td></tr></tfoot>
+                                    </table>
+                                </div>
+                                <div class="card-footer bg-light text-center"><button type="button" id="add-competitor-sale-row" class="btn btn-sm btn-outline-primary"><i class="fa-solid fa-plus"></i> إضافة مواد للبيع</button></div>
+                            </div>
+                        </div>
+
+                        <!-- Expenses Card -->
+                        <div class="card form-card">
+                            <div class="card-header collapsible-header" data-bs-toggle="collapse" data-bs-target="#collapseExpensesTable">
+                                <span><i class="fa-solid fa-file-alt me-2"></i>جدول المصاريف</span>
+                                <i class="fa-solid fa-chevron-up collapse-icon"></i>
+                            </div>
+                            <div id="collapseExpensesTable" class="collapse show">
+                                <div class="card-body border-bottom bg-light">
+                                    <div class="row g-2 align-items-end">
+                                        <div class="col-md-8">
+                                            <label for="expenseBarcodeInput" class="form-label fw-bold"><i class="fa-solid fa-barcode me-1"></i>مسح / إدخال باركود مادة التذوق</label>
+                                            <div class="form-text">سيتم البحث فقط ضمن المواد المصنفة «مادة تذوق»  .</div>
+                                            <input type="text" id="expenseBarcodeInput" class="form-control form-control-lg" inputmode="numeric" autocomplete="off" placeholder="امسح الباركود بواسطة USB أو اكتبه هنا...">
+                                        </div>
+                                        <div class="col-md-4 d-flex gap-2">
+                                            <button type="button" id="scanExpenseBarcodeCameraBtn" class="btn btn-primary btn-lg flex-fill">
+                                                <i class="fa-solid fa-camera me-1"></i> مسح بالكاميرا
+                                            </button>
+                                            <button type="button" id="clearExpenseBarcodeBtn" class="btn btn-outline-secondary btn-lg" title="مسح الحقل">
+                                                <i class="fa-solid fa-xmark"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div id="expenseBarcodeStatus" class="small mt-2" aria-live="polite"></div>
+                                </div>
+                                <div class="table-responsive">
+                                    <table class="table table-bordered table-hover mb-0">
+                                        <thead class="table-light"><tr><th>المادة</th><th style="width: 130px;">الكمية</th><th style="width: 90px;">إجراء</th></tr></thead>
+                                        <tbody id="expenses-table-body"></tbody>
+                                    </table>
+                                </div>
+                                <div class="card-footer bg-light text-center"><button type="button" id="add-expense-row" class="btn btn-sm btn-outline-primary"><i class="fa-solid fa-plus"></i> إضافة مصاريف</button></div>
+                            </div>
+                        </div>
+
+                        <!-- Notes Card -->
+                        <div class="card form-card">
+                            <div class="card-header collapsible-header collapsed" data-bs-toggle="collapse" data-bs-target="#collapseNotes">
+                                <span><i class="fa-solid fa-receipt me-2"></i>الملاحظات</span>
+                                <i class="fa-solid fa-chevron-up collapse-icon"></i>
+                            </div>
+                            <div id="collapseNotes" class="collapse">
+                                <div class="card-body"><label for="notes" class="form-label">ملاحظات إضافية</label><textarea id="notes" class="form-control" rows="4" placeholder="اكتب ملاحظاتك هنا..."></textarea></div>
+                            </div>
+                        </div>
+
+                        <div id="draftStatus" class="auto-save-indicator small text-center mb-2" aria-live="polite"></div>
+                        <div class="d-flex justify-content-center gap-2 mb-3 flex-wrap">
+                            <button type="button" id="restoreLastPointBtn" class="btn btn-sm btn-outline-info d-none"><i class="fa-solid fa-clock-rotate-left me-1"></i> استعادة آخر نقطة</button>
+                        </div>
+                        <div class="text-center my-4 d-flex justify-content-center gap-2">
+                            <button type="submit" class="btn btn-primary main-submit-btn"><i class="fa-solid fa-paper-plane"></i> إرسال التقرير</button>
+                            <button type="button" id="submitAndAddAnotherBtn" class="btn btn-success"><i class="fa-solid fa-plus-circle"></i> إرسال وإضافة آخر</button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- MODAL FOR SUCCESS MESSAGE -->
+                <div class="modal fade" id="successModal" tabindex="-1" aria-hidden="true">
+                    <div class="modal-dialog modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header bg-success text-white">
+                                <h5 class="modal-title">تم بنجاح!</h5>
+                                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body text-center">
+                                <p class="fs-5">التقرير قيد الحفظ في الخلفية...</p>
+                                <div id="success-spinner" class="spinner-border spinner-border-sm text-primary" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إغلاق</button>
+                                <a href="#" id="viewReportBtn" class="btn btn-primary disabled">عرض التقرير في السجل</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MODAL FOR PRODUCT SELECTION -->
+                <div class="modal fade" id="productSelectionModal" tabindex="-1" aria-labelledby="productSelectionModalLabel" aria-hidden="true">
+                    <div class="modal-dialog modal-lg modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="productSelectionModalLabel">اختيار مواد المبيعات</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body">
+                                <div class="mb-3"><input type="text" id="productSearchInput" class="form-control" placeholder="ابحث عن مادة..."></div>
+                                <div class="table-responsive"><table class="table table-hover" id="productSelectionTable"><thead><tr><th style="width: 50px;">اختيار</th><th>اسم المادة</th></tr></thead><tbody></tbody></table></div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إغلاق</button>
+                                <button type="button" class="btn btn-primary" id="addSelectedProductsBtn">إضافة المواد المحددة</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MODAL FOR COMPETITOR PRODUCTS -->
+                <div class="modal fade" id="competitorProductSelectionModal" tabindex="-1" aria-labelledby="competitorProductSelectionModalLabel" aria-hidden="true">
+                    <div class="modal-dialog modal-lg modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="competitorProductSelectionModalLabel">اختيار مواد المنافس</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body">
+                                <div class="mb-3"><input type="text" id="competitorProductSearchInput" class="form-control" placeholder="ابحث عن مادة المنافس..."></div>
+                                <div class="table-responsive"><table class="table table-hover" id="competitorProductSelectionTable"><thead><tr><th style="width:50px;">اختيار</th><th>اسم المادة</th></tr></thead><tbody></tbody></table></div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إغلاق</button>
+                                <button type="button" class="btn btn-primary" id="addSelectedCompetitorProductsBtn">إضافة المواد المحددة</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MODAL FOR PROMOTERS AT POINT -->
+                <div class="modal fade" id="promotersSelectionModal" tabindex="-1" aria-labelledby="promotersSelectionModalLabel" aria-hidden="true">
+                    <div class="modal-dialog modal-lg modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="promotersSelectionModalLabel">الأشخاص المتواجدين ضمن النقطة</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body">
+                                <input type="text" id="promotersSearchInput" class="form-control mb-3" placeholder="ابحث عن موظف...">
+                                <div class="table-responsive">
+                                    <table class="table table-hover align-middle" id="promotersSelectionTable">
+                                        <thead><tr><th style="width:70px;">اختيار</th><th>اسم الموظف</th></tr></thead>
+                                        <tbody></tbody>
+                                    </table>
+                                </div>
+                                <div id="promotersEmptyMessage" class="text-center text-muted d-none">لا يوجد مروجون متاحون.</div>
+                                <div class="alert alert-info py-2 mb-0 mt-3">يمكن اختيار جميع الأشخاص المتواجدين مباشرة، وسيتم حفظهم مع التقرير.</div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
+                                <button type="button" class="btn btn-primary" id="savePromotersBtn"><i class="fa-solid fa-check me-1"></i> حفظ الأشخاص المحددين</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MODAL FOR BARCODE CAMERA -->
+                <div class="modal fade" id="barcodeCameraModal" tabindex="-1" aria-labelledby="barcodeCameraModalLabel" aria-hidden="true">
+                    <div class="modal-dialog modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="barcodeCameraModalLabel"><i class="fa-solid fa-camera me-1"></i> مسح الباركود بالكاميرا</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body">
+                                <div id="barcode-reader" style="width:100%;"></div>
+                                <div id="cameraScannerStatus" class="text-center text-muted small mt-2">وجّه الكاميرا نحو الباركود. يجب فتح الموقع عبر HTTPS والسماح للمتصفح بالكاميرا.</div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إغلاق</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MODAL FOR EXPENSE SELECTION -->
+                <div class="modal fade" id="expenseSelectionModal" tabindex="-1" aria-labelledby="expenseSelectionModalLabel" aria-hidden="true">
+                    <div class="modal-dialog modal-lg modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="expenseSelectionModalLabel">اختيار مواد التذوق</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body">
+                                <div class="mb-3"><input type="text" id="expenseSearchInput" class="form-control" placeholder="ابحث عن مادة تذوق..."></div>
+                                <div class="table-responsive"><table class="table table-hover" id="expenseSelectionTable"><thead><tr><th style="width: 50px;">اختيار</th><th>اسم المصروف</th></tr></thead><tbody></tbody></table></div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إغلاق</button>
+                                <button type="button" class="btn btn-primary" id="addSelectedExpensesBtn">إضافة مواد التذوق المحددة</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- إضافة بيانات جديدة إلى Locations -->
+                <div class="modal fade" id="addLocationModal" tabindex="-1" aria-labelledby="addLocationModalLabel" aria-hidden="true">
+                    <div class="modal-dialog modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="addLocationModalLabel">إضافة بيانات جديدة</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <form id="addLocationForm">
+                                <div class="modal-body">
+                                    <input type="hidden" id="addLocationType">
+                                    <div id="addLocationContext" class="alert alert-info py-2"></div>
+                                    <label for="addLocationValue" class="form-label">القيمة الجديدة</label>
+                                    <input type="text" id="addLocationValue" class="form-control" required="" autocomplete="off">
+                                </div>
+                                <div class="modal-footer">
+                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
+                                    <button type="submit" class="btn btn-success" id="saveLocationBtn"><i class="fa-solid fa-save me-1"></i>حفظ</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ==================== شاشة السجل ==================== -->
+            <section id="view-history" class="d-none">
+                <div class="page-hero">
+                    <div class="page-hero-inner">
+                        <div class="page-hero-icon"><i class="fa-solid fa-clock-rotate-left"></i></div>
+                        <div>
+                            <h1 class="page-hero-title">سجل التعديلات</h1>
+                            <p class="page-hero-sub">تصفّح جميع التقارير المُدخلة وابحث فيها وصدّرها، وعدّل أي تقرير عند الحاجة.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="main-container">
+                    <div class="card history-card">
+                        <div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-3">
+                            <h5 class="mb-0 text-dark"><i class="fa-solid fa-history me-2"></i><span id="historyTitle">سجل تقاريري</span></h5>
+                            <div class="d-flex align-items-center gap-2 flex-wrap">
+                                <div id="historyEmployeeFilterWrap" class="d-none">
+                                    <select id="historyEmployeeFilterSelect" class="form-select form-select-sm" style="min-width:190px;"></select>
+                                </div>
+                                <span id="reportsCount" class="badge bg-primary fs-6">0 تقرير</span><button type="button" class="btn btn-sm btn-success d-none" id="approveAllReportsBtn"><i class="fa-solid fa-check-double me-1"></i>اعتماد الكل</button><div class="search-bar"><input type="text" id="searchInput" class="form-control form-control-sm" placeholder="ابحث في تقاريرك..."><i class="fa fa-search"></i></div>
+                                <button type="button" class="btn btn-sm btn-outline-success" id="exportHistoryCSV" title="تصدير التقارير إلى CSV"><i class="fa-solid fa-file-csv me-1"></i>تصدير CSV</button>
+                                <button type="button" class="btn btn-sm btn-outline-success" id="exportHistoryXLSX" title="تصدير التقارير إلى Excel"><i class="fa-solid fa-file-excel me-1"></i>تصدير Excel</button>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <div class="d-flex flex-wrap gap-2 mb-3 align-items-center" id="historyFiltersWrap">
+                                <select id="historyCampaignFilter" class="form-select form-select-sm" style="min-width:140px;" data-label="كل الحملات"><option value="">كل الحملات</option></select>
+                                <select id="historyEventFilter" class="form-select form-select-sm" style="min-width:150px;" data-label="كل الأحداث"><option value="">كل الأحداث</option></select>
+                                <select id="historyStatusFilter" class="form-select form-select-sm" style="min-width:140px;" data-label="كل الحالات"><option value="">كل الحالات</option><option value="approved">معتمد</option><option value="rejected">مرفوض</option><option value="pending">قيد المراجعة</option></select>
+                                <input type="text" id="historyIdFilter" class="form-control form-control-sm" style="max-width:210px;" placeholder="رقم التقرير / الباركود..." autocomplete="off" dir="ltr">
+                                <button type="button" class="btn btn-sm btn-outline-danger" id="clearHistoryFiltersBtn" title="مسح الفلاتر والبحث"><i class="fa-solid fa-xmark me-1"></i>مسح</button>
+                            </div>
+                            <div class="accordion" id="reports-accordion"></div>
+                            <div class="text-center d-none mt-3" id="loadMoreReportsWrap"><button type="button" class="btn btn-outline-primary btn-sm" id="loadMoreReportsBtn"><i class="fa-solid fa-angles-down me-1"></i> عرض المزيد</button></div>
+                            <div id="no-results-message" class="alert alert-secondary text-center d-none"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MODAL: QR CODE لتعديل التقرير بسرعة -->
+                <div class="modal fade" id="qrModal" tabindex="-1" aria-labelledby="qrModalLabel" aria-hidden="true">
+                    <div class="modal-dialog modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="qrModalLabel"><i class="fa-solid fa-qrcode me-1"></i> رمز QR للتعديل السريع</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body text-center">
+                                <div id="qrCanvasWrap"></div>
+                                <p class="small text-muted">امسح الرمز بجهاز آخر ليفتح التقرير مباشرة في وضع التعديل.</p>
+                                <div class="input-group">
+                                    <input type="text" id="qrEditLink" class="form-control form-control-sm" readonly="" dir="ltr" style="direction:ltr;">
+                                    <button class="btn btn-outline-secondary btn-sm" type="button" id="qrCopyLinkBtn" title="نسخ الرابط"><i class="fa-regular fa-copy"></i></button>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إغلاق</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MODAL: تفاصيل عناصر المزامنة المعلّقة -->
+                <div class="modal fade" id="syncDetailsModal" tabindex="-1" aria-labelledby="syncDetailsModalLabel" aria-hidden="true">
+                    <div class="modal-dialog modal-lg modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="syncDetailsModalLabel"><i class="fa-solid fa-cloud-arrow-up me-1"></i> عناصر بانتظار المزامنة</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body">
+                                <div id="syncListStatus" class="small text-muted mb-2"></div>
+                                <div id="syncListContainer" class="list-group"></div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إغلاق</button>
+                                <button type="button" class="btn btn-primary" id="syncNowBtn"><i class="fa-solid fa-arrows-rotate me-1"></i> مزامنة الآن</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ==================== شاشة السحب/المرتجع ==================== -->
+            <section id="view-movement" class="d-none">
+                <div class="page-hero">
+                    <div class="page-hero-inner">
+                        <div class="page-hero-icon"><i class="fa-solid fa-boxes-stacked"></i></div>
+                        <div>
+                            <h1 class="page-hero-title">سحب / مرتجع مواد</h1>
+                            <p class="page-hero-sub">أدر محصلة موادك الشخصية، وسجّل عمليات السحب والمرتجع مع متابعة المتبقي لديك.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="main-container">
+                    <div class="card form-card">
+                        <div class="card-header">
+                            <span><i class="fa-solid fa-boxes-stacked me-2"></i>سحب / مرتجع مواد — محصلتي الشخصية</span>
+                        </div>
+                        <div class="card-body">
+                            <div class="alert alert-info py-2 mb-0">
+                                كل ما تسجّله هنا مرتبط بحسابك أنت: كل مستخدم يرى فقط سحبه ومرتجعه ومحصلة المواد الباقية معه.
+                                عند حفظ أي تقرير يحتوي على مصاريف، تُطرح كميات المصاريف تلقائياً
+                                من محصلتك (تظهر في السجل كحركة "صرف (تلقائي)"). أما إرسال صافي المحصلة إلى المبيعات يتم <strong>يدوياً</strong>: عند الضغط على الزر تختار التقرير الذي ستضاف إليه هذه المبيعات.
+                            </div>
+                            <div id="movementEmployeeFilterWrap" class="mt-3 d-none">
+                                <label for="movementEmployeeFilterSelect" class="form-label mb-1 fw-bold">عرض بيانات:</label>
+                                <select id="movementEmployeeFilterSelect" class="form-select form-select-sm" style="max-width:320px;"></select>
+                            </div>
+                            <div id="reportInfoBox" class="alert alert-success mt-3"></div>
+                        </div>
+                    </div><br>
+
+                    <div id="movementWorkArea">
+                        <div id="movementEntryCard" class="card form-card">
+                            <div class="card-header collapsible-header" data-bs-toggle="collapse" data-bs-target="#collapseMovementEntry">
+                                <span><i class="fa-solid fa-right-left me-2"></i>تسجيل سحب / مرتجع مواد</span>
+                                <i class="fa-solid fa-chevron-up collapse-icon"></i>
+                            </div>
+                            <div id="collapseMovementEntry" class="collapse show">
+                                <div class="card-body border-bottom bg-light text-center">
+                                    <button type="button" id="addMovementRowBtn" class="btn btn-outline-primary">
+                                        <i class="fa-solid fa-plus me-1"></i> إضافة مادة
+                                    </button>
+                                </div>
+                                <div class="table-responsive">
+                                    <table class="table table-bordered table-hover mb-0">
+                                        <thead class="table-light">
+                                            <tr><th>المادة</th><th style="width:120px;">الكمية</th><th style="width:160px;">رقم الفاتورة</th><th style="width:170px;">العملية</th><th style="width:90px;">إجراء</th></tr>
+                                        </thead>
+                                        <tbody id="movement-table-body"></tbody>
+                                    </table>
+                                </div>
+                                <div class="card-footer bg-light text-center">
+                                    <button type="button" id="saveMovementBtn" class="btn btn-success">
+                                        <i class="fa-solid fa-floppy-disk me-1"></i> حفظ الحركة
+                                    </button>
+                                </div>
+                            </div>
+                        </div><br>
+
+                        <div class="card form-card">
+                            <div class="card-header collapsible-header" data-bs-toggle="collapse" data-bs-target="#collapseMovementHistory">
+                                <span><i class="fa-solid fa-clock-rotate-left me-2"></i>سجل حركات السحب والمرتجع</span>
+                                <i class="fa-solid fa-chevron-up collapse-icon"></i>
+                            </div>
+                            <div id="collapseMovementHistory" class="collapse show">
+                                <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 p-2 border-bottom">
+                                    <select id="movementApprovalFilter" class="form-select form-select-sm" style="max-width:220px;">
+                                        <option value="">كل حالات المراجعة</option>
+                                        <option value="approved">معتمد</option>
+                                        <option value="rejected">مرفوض</option>
+                                        <option value="pending">قيد المراجعة</option>
+                                    </select>
+                                    <span id="movementCount" class="badge bg-primary">0 حركة</span><button type="button" class="btn btn-sm btn-success d-none" id="approveAllMovementsBtn"><i class="fa-solid fa-check-double me-1"></i>اعتماد الكل</button>
+                                </div>
+                                <div class="table-responsive">
+                                    <table class="table table-sm table-bordered mb-0">
+                                        <thead class="table-light">
+                                            <tr><th>المادة</th><th>الكمية</th><th>رقم الفاتورة</th><th>العملية</th><th>التاريخ</th><th>التقرير</th><th>المستخدم</th><th>المراجعة</th></tr>
+                                        </thead>
+                                        <tbody id="movement-history-body">
+                                            <tr><td colspan="7" class="text-center text-muted">لا توجد حركات مسجلة بعد</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div><br>
+
+                        <div class="card form-card">
+                            <div class="card-header collapsible-header" data-bs-toggle="collapse" data-bs-target="#collapseInventorySummary">
+                                <span><i class="fa-solid fa-clipboard-list me-2"></i>محصلة المواد الباقية معي</span>
+                                <i class="fa-solid fa-chevron-up collapse-icon"></i>
+                            </div>
+                            <div id="collapseInventorySummary" class="collapse show">
+                                <div class="table-responsive">
+                                    <table class="table table-bordered mb-0">
+                                        <thead class="table-light">
+                                            <tr><th>المادة</th><th>إجمالي السحب</th><th>إجمالي المرتجع</th><th>إجمالي الصرف (تلقائي من جميع التقارير)</th><th>إجمالي المبيعات المُرسَلة</th><th>المتبقي معي (الصافي)</th></tr>
+                                        </thead>
+                                        <tbody id="inventory-summary-body">
+                                            <tr><td colspan="6" class="text-center text-muted">لا توجد بيانات بعد</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div class="card-footer bg-light text-center">
+                                    <button type="button" id="closeOutTallyBtn" class="btn btn-primary">
+                                        <i class="fa-solid fa-paper-plane me-1"></i> إرسال صافي المحصلة إلى المبيعات
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MODAL FOR REPORT SELECTION -->
+                <div class="modal fade" id="salesReportSelectionModal" tabindex="-1" aria-labelledby="salesReportSelectionModalLabel" aria-hidden="true">
+                    <div class="modal-dialog modal-lg modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="salesReportSelectionModalLabel">اختيار التقرير لإضافة المبيعات</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body">
+                                <div class="mb-3">
+                                    <input type="text" id="salesReportSearchInput" class="form-control" placeholder="ابحث برقم التقرير أو الحملة أو المحل أو التاريخ...">
+                                </div>
+                                <div id="salesReportSelectionStatus" class="small text-muted mb-2"></div>
+                                <div class="table-responsive">
+                                    <table class="table table-hover align-middle" id="salesReportSelectionTable">
+                                        <thead><tr><th style="width:50px;">اختيار</th><th>رقم التقرير</th><th>الحملة</th><th>المحل / المول</th><th>التاريخ</th><th>الحدث</th></tr></thead>
+                                        <tbody></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إغلاق</button>
+                                <button type="button" class="btn btn-primary" id="confirmSalesReportBtn">متابعة وإرسال</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MODAL FOR PRODUCT SELECTION -->
+                <div class="modal fade" id="movementProductSelectionModal" tabindex="-1" aria-labelledby="movementProductSelectionModalLabel" aria-hidden="true">
+                    <div class="modal-dialog modal-lg modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="movementProductSelectionModalLabel">اختيار المواد</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body">
+                                <div class="mb-3"><input type="text" id="movementProductSearchInput" class="form-control" placeholder="ابحث عن مادة..."></div>
+                                <div class="table-responsive"><table class="table table-hover" id="movementProductSelectionTable"><thead><tr><th style="width: 50px;">اختيار</th><th>اسم المادة</th></tr></thead><tbody></tbody></table></div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إغلاق</button>
+                                <button type="button" class="btn btn-primary" id="addSelectedMovementProductsBtn">إضافة المواد المحددة</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MODAL FOR EDITING A NON-APPROVED MOVEMENT (OWNER / REVIEWER) -->
+                <div class="modal fade" id="movementEditModal" tabindex="-1" aria-labelledby="movementEditModalLabel" aria-hidden="true">
+                    <div class="modal-dialog modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="movementEditModalLabel">تعديل حركة سحب/مرتجع</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body">
+                                <input type="hidden" id="movementEditId">
+                                <div class="mb-3"><label class="form-label fw-bold">اسم المادة</label><input type="text" id="movementEditItem" class="form-control" maxlength="200"></div>
+                                <div class="row g-3">
+                                    <div class="col-md-4"><label class="form-label fw-bold">الكمية</label><input type="number" id="movementEditQuantity" class="form-control" min="1" step="1"></div>
+                                    <div class="col-md-4"><label class="form-label fw-bold">نوع العملية</label><select id="movementEditOperation" class="form-select"><option value="سحب">سحب</option><option value="مرتجع">مرتجع</option></select></div>
+                                    <div class="col-md-4"><label class="form-label fw-bold">رقم الفاتورة</label><input type="text" id="movementEditInvoice" class="form-control"></div>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
+                                <button type="button" class="btn btn-primary" id="saveMovementEditBtn"><i class="fa-solid fa-check me-1"></i> حفظ التعديل</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- MODAL FOR EDITING A NON-APPROVED ATTENDANCE RECORD (OWNER / REVIEWER) -->
+                <div class="modal fade" id="attendanceEditModal" tabindex="-1" aria-labelledby="attendanceEditModalLabel" aria-hidden="true">
+                    <div class="modal-dialog modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="attendanceEditModalLabel">تعديل سجل دوام</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body">
+                                <input type="hidden" id="attendanceEditTimestamp">
+                                <input type="hidden" id="attendanceEditUsername">
+                                <div class="mb-3"><label class="form-label fw-bold">حالة الدوام</label><select id="attendanceEditStatus" class="form-select"></select></div>
+                                <div class="mb-3"><label class="form-label fw-bold">بيان الدوام</label><input id="attendanceEditStatement" class="form-control" maxlength="250" required=""></div>
+                                <div class="mb-3"><label class="form-label fw-bold">الملاحظات</label><textarea id="attendanceEditNotes" class="form-control" rows="2" maxlength="500"></textarea></div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
+                                <button type="button" class="btn btn-primary" id="saveAttendanceEditBtn"><i class="fa-solid fa-check me-1"></i> حفظ التعديل</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ==================== شاشة الدوام ==================== -->
+            <section id="view-attendance" class="d-none">
+                <div class="page-hero"><div class="page-hero-inner"><div class="page-hero-icon"><i class="fa-solid fa-user-clock"></i></div><div><h1 class="page-hero-title">الدوام</h1><p class="page-hero-sub">سجّل حضورك اليومي، حدّد حالة الدوام، وأرفق التقرير الطبي عند الغياب المرضي.</p></div></div></div>
+                <div class="main-container">
+                    <div class="card form-card mb-4">
+                        <div class="card-header"><i class="fa-solid fa-user-clock me-2"></i> تسجيل الدوام</div>
+                        <div class="card-body">
+                            <p class="text-muted">سيتم تسجيل التاريخ والوقت تلقائياً.</p>
+                            <form id="attendanceForm">
+                                <div class="row g-3">
+                                    <div class="col-md-4"><label class="form-label fw-bold">حالة الدوام</label><select id="attendanceStatus" class="form-select" required=""><option value="">جار التحميل...</option></select></div>
+                                    <div class="col-md-8" id="attendanceStatementWrap"><label class="form-label fw-bold">بيان الدوام</label><input id="attendanceStatement" class="form-control" required="" maxlength="250" placeholder="دوام عادي أو مهمة ميدانية"></div>
+                                    <div class="col-md-8 d-none" id="medicalReportWrap"><label class="form-label fw-bold">التقرير الطبي (PDF أو صورة)</label><input type="file" id="medicalReportFile" class="form-control" accept="application/pdf,image/*"><small class="text-muted d-block mt-1">مطلوب عند اختيار حالة "اجازة مرضية". الحد الأقصى لحجم الملف 5 ميجابايت.</small></div>
+                                    <div class="col-12"><label class="form-label fw-bold">الملاحظات</label><textarea id="attendanceNotes" class="form-control" rows="2" maxlength="500"></textarea></div>
+                                </div>
+                                <button class="btn btn-primary mt-4" type="submit"><i class="fa-solid fa-check me-1"></i> تسجيل الدوام</button>
+                                <div id="attendanceStatusMessage"></div>
+                            </form>
+                        </div>
+                    </div>
+                    <div class="card history-card">
+                        <div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2">
+                            <h5 class="mb-0"><i class="fa-solid fa-list-check me-2"></i> سجل الدوام</h5>
+                            <div class="d-flex gap-2 flex-wrap">
+                                <div id="attendanceEmployeeFilterWrap" class="d-none"><select id="attendanceEmployeeFilter" class="form-select form-select-sm"></select></div>
+                                <select id="attendanceFilterStatus" class="form-select form-select-sm"><option value="">كل الحالات</option></select>
+                                <select id="attendanceApprovalFilter" class="form-select form-select-sm"><option value="">كل حالات المراجعة</option><option value="approved">معتمد</option><option value="rejected">مرفوض</option><option value="pending">قيد المراجعة</option></select>
+                                <span id="attendanceCount" class="badge bg-primary">0 سجل</span><button type="button" class="btn btn-sm btn-success d-none" id="approveAllAttendanceBtn"><i class="fa-solid fa-check-double me-1"></i>اعتماد الكل</button>
+                            </div>
+                        </div>
+                        <div class="table-responsive"><table class="table table-bordered table-hover mb-0"><thead class="table-light"><tr><th>Timestamp</th><th>Username</th><th>حالة الدوام</th><th>بيان الدوام</th><th>الملاحظات</th><th>التقرير الطبي</th><th>المراجعة</th></tr></thead><tbody id="attendance-table-body"></tbody></table></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ==================== شاشة التحليلات ==================== -->
+            <section id="view-dashboard" class="d-none">
+                <div class="page-hero">
+                    <div class="page-hero-inner">
+                        <div class="page-hero-icon"><i class="fa-solid fa-chart-line"></i></div>
+                        <div>
+                            <h1 class="page-hero-title">لوحة التحليلات</h1>
+                            <p class="page-hero-sub">نظرة شاملة على مؤشرات الأداء، المبيعات اليومية، وتوزيع الحملات مع إمكانية التصدير.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="main-container" id="dashboard-container">
+                    <div class="card history-card">
+                        <div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-3">
+                            <h5 class="mb-0 text-dark"><i class="fa-solid fa-chart-line me-2"></i>لوحة التحليل والبيانات</h5>
+                            <div class="d-flex align-items-center gap-2 flex-wrap">
+                                <select id="dashboardCampaignFilter" class="form-select form-select-sm" style="min-width:160px;">
+                                    <option value="">كل الحملات</option>
+                                </select>
+                                <select id="dashboardRangeFilter" class="form-select form-select-sm" style="min-width:130px;" title="فترة المقارنة (نسبة التغير %)">
+                                    <option value="7">آخر 7 أيام</option>
+                                    <option value="30" selected="">آخر 30 يوم</option>
+                                    <option value="90">آخر 90 يوم</option>
+                                    <option value="120">آخر 120 يوم</option>
+                                    <option value="all">كل الفترات</option>
+                                </select>
+                                <span id="dashboardPeriodSpan" class="badge bg-primary fs-6">30 يوم</span>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <!-- KPI Cards -->
+                            <div class="row g-3 mb-4">
+                                <div class="col-6 col-md-3">
+                                    <div class="card border-0 shadow-sm h-100 kpi-card">
+                                        <div class="card-body text-center">
+                                            <div class="kpi-icon kpi-icon-primary"><i class="fa-solid fa-file-lines"></i></div>
+                                            <div class="fs-4 fw-bold" id="kpiTotalReports">-</div>
+                                            <span class="kpi-delta d-none" id="kpiTotalReportsDelta"></span>
+                                            <div class="text-muted small">إجمالي التقارير</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-6 col-md-3">
+                                    <div class="card border-0 shadow-sm h-100 kpi-card">
+                                        <div class="card-body text-center">
+                                            <div class="kpi-icon kpi-icon-success"><i class="fa-solid fa-cash-register"></i></div>
+                                            <div class="fs-4 fw-bold" id="kpiTotalSales">-</div>
+                                            <span class="kpi-delta d-none" id="kpiTotalSalesDelta"></span>
+                                            <div class="text-muted small">إجمالي المبيعات</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-6 col-md-3">
+                                    <div class="card border-0 shadow-sm h-100 kpi-card">
+                                        <div class="card-body text-center">
+                                            <div class="kpi-icon kpi-icon-warning"><i class="fa-solid fa-users"></i></div>
+                                            <div class="fs-4 fw-bold" id="kpiActiveEmployees">-</div>
+                                            <span class="kpi-delta d-none" id="kpiActiveEmployeesDelta"></span>
+                                            <div class="text-muted small">موظفين نشطين</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-6 col-md-3">
+                                    <div class="card border-0 shadow-sm h-100 kpi-card">
+                                        <div class="card-body text-center">
+                                            <div class="kpi-icon kpi-icon-info"><i class="fa-solid fa-boxes-stacked"></i></div>
+                                            <div class="fs-4 fw-bold" id="kpiTotalProducts">-</div>
+                                            <div class="text-muted small">إجمالي المواد</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Charts -->
+                            <div class="row g-4 mb-4">
+                                <div class="col-md-8">
+                                    <div class="card border-0 shadow-sm h-100">
+                                        <div class="card-body">
+                                            <h6 class="card-title mb-3"><i class="fa-solid fa-chart-column me-2"></i>المبيعات حسب اليوم</h6>
+                                            <div class="chart-container" style="position:relative;height:320px;">
+                                                <canvas id="chartDailySales"></canvas>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="card border-0 shadow-sm h-100">
+                                        <div class="card-body">
+                                            <h6 class="card-title mb-3"><i class="fa-solid fa-chart-pie me-2"></i>توزيع المبيعات حسب الحملة</h6>
+                                            <div class="chart-container" style="position:relative;height:320px;">
+                                                <canvas id="chartCampaignPie"></canvas>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="row g-4">
+                                <div class="col-md-6">
+                                    <div class="card border-0 shadow-sm h-100">
+                                        <div class="card-body">
+                                            <h6 class="card-title mb-3"><i class="fa-solid fa-map-location-dot me-2"></i>المبيعات حسب المحفظة</h6>
+                                            <div class="chart-container" style="position:relative;height:280px;">
+                                                <canvas id="chartGovernorateBar"></canvas>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="card border-0 shadow-sm h-100">
+                                        <div class="card-body">
+                                            <h6 class="card-title mb-3"><i class="fa-solid fa-trophy me-2"></i>أداء الموظفين</h6>
+                                            <div class="table-responsive" style="max-height:280px;overflow-y:auto;">
+                                                <table class="table table-sm table-hover mb-0 align-middle">
+                                                    <thead class="table-light"><tr><th>الموظف</th><th>التقارير</th><th>المبيعات</th></tr></thead>
+                                                    <tbody id="employeePerformanceBody">
+                                                        <tr><td colspan="3" class="text-center text-muted py-4">جار التحميل...</td></tr>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="row g-4 mt-1">
+                                <div class="col-12">
+                                    <div class="card border-0 shadow-sm">
+                                        <div class="card-body">
+                                            <h6 class="card-title mb-3"><i class="fa-solid fa-users-viewfinder me-2"></i>إنجازات المروجين</h6>
+                                            <div class="table-responsive" style="max-height:320px;overflow-y:auto;">
+                                                <table class="table table-sm table-hover mb-0 align-middle">
+                                                    <thead class="table-light"><tr><th>المروج</th><th>النقاط</th><th>القطع المباعة</th><th>قيمة المبيعات</th></tr></thead>
+                                                    <tbody id="promoterPerformanceBody">
+                                                        <tr><td colspan="4" class="text-center text-muted py-3">جار التحميل...</td></tr>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                            <div class="small text-muted mt-2">يُحتسب لكل مروج مذكور ضمن فريق النقطة عدد النقاط التي شارك فيها، والقطع/القيمة من إجمالي مبيعات هذه النقاط خلال الفترة المحددة.</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="row g-4 mt-1">
+                                <div class="col-12">
+                                    <div class="card border-0 shadow-sm">
+                                        <div class="card-body">
+                                            <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+                                                <h6 class="card-title mb-0"><i class="fa-solid fa-store me-2"></i>إحصاءات المحلات والزيارات</h6>
+                                                <div class="d-flex gap-2 flex-wrap small">
+                                                    <span class="badge bg-primary">إجمالي المحلات: <span id="marketCountTotal">0</span></span>
+                                                    <span class="badge bg-success">مزارة هذا الشهر: <span id="marketCountVisited">0</span></span>
+                                                    <span class="badge bg-warning text-dark">لم تزر هذا الشهر: <span id="marketCountRemaining">0</span></span>
+                                                </div>
+                                            </div>
+                                            <div class="table-responsive" style="max-height:320px;overflow-y:auto;">
+                                                <table class="table table-sm table-hover mb-0 align-middle">
+                                                    <thead class="table-light"><tr><th>المحل</th><th>عدد الزيارات</th><th>آخر زيارة</th><th>الحالة</th></tr></thead>
+                                                    <tbody id="marketStatsBody">
+                                                        <tr><td colspan="4" class="text-center text-muted py-3">جار التحميل...</td></tr>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                            <div class="small text-muted mt-2">يعرض آخر نشاط لكل محل وفق التقارير المحفوظة ويحدد المحلات التي لم تُزَر خلال الشهر الحالي.</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="row g-4 mt-1">
+                                <div class="col-12">
+                                    <div class="card border-0 shadow-sm">
+                                        <div class="card-body">
+                                            <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+                                                <h6 class="card-title mb-0"><i class="fa-solid fa-bullseye me-2"></i>أهداف المروجين الشهرية <span class="badge bg-primary ms-1" id="promoterGoalsMonth"></span></h6>
+                                                <div class="d-flex gap-2 align-items-center flex-wrap">
+                                                    <input type="month" id="promoterGoalsMonthInput" class="form-control form-control-sm" style="width:auto;">
+                                                    <button class="btn btn-sm btn-primary" id="savePromoterGoalsBtn"><i class="fa-solid fa-floppy-disk me-1"></i>حفظ الأهداف</button>
+                                                </div>
+                                            </div>
+                                            <div class="table-responsive" style="max-height:380px;overflow-y:auto;">
+                                                <table class="table table-sm table-hover mb-0 align-middle">
+                                                    <thead class="table-light"><tr><th>المروج</th><th>هدف النقاط</th><th>النقاط المنفذة</th><th>إنجاز النقاط</th><th>هدف القطع</th><th>القطع المباعة</th><th>إنجاز القطع</th></tr></thead>
+                                                    <tbody id="promoterGoalsBody">
+                                                        <tr><td colspan="7" class="text-center text-muted py-3">جار التحميل...</td></tr>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                            <div class="small text-muted mt-2">أدخل هدف النقاط والقطع لكل مروج ثم «حفظ الأهداف» — تُحفظ على الخادم وتُحسب النسب من التقارير الفعلية لنفس الشهر.</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="row g-4 mt-1">
+                                <div class="col-12">
+                                    <div class="card border-0 shadow-sm">
+                                        <div class="card-body">
+                                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                                <h6 class="card-title mb-0"><i class="fa-solid fa-file-export me-2"></i>تصدير البيانات</h6>
+                                            </div>
+                                            <div class="d-flex gap-2 flex-wrap">
+                                                <button class="btn btn-sm btn-outline-success" id="exportDashboardCSV">
+                                                    <i class="fa-solid fa-file-csv me-1"></i>تصدير CSV
+                                                </button>
+                                                <button class="btn btn-sm btn-success" id="exportDashboardXLSX">
+                                                    <i class="fa-solid fa-file-excel me-1"></i>تصدير Excel
+                                                </button>
+                                            </div>
+                                            <div class="small text-muted mt-2">تصدير جميع التقارير (بعد الفلترة) إلى ملف CSV أو Excel للتحليل.</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="row g-4 mt-1">
+                                <div class="col-md-7">
+                                    <div class="card border-0 shadow-sm h-100">
+                                        <div class="card-body">
+                                            <h6 class="card-title mb-3"><i class="fa-solid fa-map-location-dot me-2"></i>خريطة لبنان الحرارية للمبيعات</h6>
+                                            <div class="lebanon-map-wrap" id="lebanonMapWrap">
+                                                <div class="text-center text-muted py-4"><i class="fa-solid fa-spinner fa-spin"></i></div>
+                                            </div>
+                                            <div class="map-gradient-legend mt-2"><span>منخفض</span><span class="map-gradient-bar"></span><span>مرتفع</span></div>
+                                            <div class="small text-muted text-center mt-1">قطر النقطة ولونها يعكسان حصة المحافظة من مبيعات الفترة المحددة بالتقرير.</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-5">
+                                    <div class="card border-0 shadow-sm h-100">
+                                        <div class="card-body">
+                                            <h6 class="card-title mb-3"><i class="fa-solid fa-bell me-2"></i>تنبيهات ذكية <span id="anomalyCount" class="badge bg-danger ms-1">0</span></h6>
+                                            <ul id="anomalyList" class="anomaly-list"><li class="text-muted small py-2 text-center">جارٍ تحليل البيانات...</li></ul>
+                                            <div id="anomalyEmpty" class="small text-muted text-center py-2 d-none">لا توجد شذوذ في الفترة المحددة — كل شيء تحت السيطرة.</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="row g-4 mt-1">
+                                <div class="col-12">
+                                    <div class="card border-0 shadow-sm">
+                                        <div class="card-body">
+                                            <div class="d-flex flex-wrap justify-content-between align-items-center mb-3 gap-2">
+                                                <h6 class="card-title mb-0"><i class="fa-solid fa-calendar-week me-2"></i>الموجز الأسبوعي الآلي</h6>
+                                                <div class="d-flex gap-2 flex-wrap">
+                                                    <button class="btn btn-sm btn-primary" id="generateWeeklyBtn"><i class="fa-solid fa-wand-magic-sparkles me-1"></i>إنشاء الموجز</button>
+                                                    <button class="btn btn-sm btn-outline-secondary d-none" id="copyWeeklyBtn"><i class="fa-regular fa-copy me-1"></i>نسخ</button>
+                                                    <button class="btn btn-sm btn-outline-secondary d-none" id="downloadWeeklyBtn"><i class="fa-solid fa-download me-1"></i>تنزيل</button>
+                                                </div>
+                                            </div>
+                                            <textarea id="weeklySummaryOutput" class="form-control" rows="9" readonly="" placeholder="اضغط «إنشاء الموجز» ليحضّر لك ملخص آخر 7 أيام جاهزاً للمشاركة أو للعرض على الجهة."></textarea>
+                                            <div class="small text-muted mt-2">الموجز يُحضَّر من البيانات المتاحة حالياً. للإرسال التلقائي المجدول إلى البريد/واتساب، ننفّذ الحزمة المقابلة في Google Apps Script (مذكورة في code.gs.txt).</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="row g-4 mt-1 d-none" id="backupCardWrap">
+                                <div class="col-12">
+                                    <div class="card border-0 shadow-sm">
+                                        <div class="card-body">
+                                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                                <h6 class="card-title mb-0"><i class="fa-solid fa-cloud-arrow-up me-2"></i>النسخ الاحتياطي الأسبوعي</h6>
+                                            </div>
+                                            <div class="small text-muted mb-3">ينشئ نسخة كاملة من كل الأوراق (القيم فقط) في جدول مستقل داخل Drive حساب النظام كل أسبوع تلقائياً، أو عند الطلب الآن. رمز الجدول الناتج مدعوم للتنزيل والاسترجاع.</div>
+                                            <div class="d-flex gap-2 flex-wrap align-items-center">
+                                                <button class="btn btn-sm btn-primary" id="setupWeeklyBackupBtn"><i class="fa-solid fa-clock me-1"></i>تفعيل النسخ الأسبوعي</button>
+                                                <button class="btn btn-sm btn-outline-primary" id="backupNowBtn"><i class="fa-solid fa-rotate me-1"></i>نسخ احتياطي الآن</button>
+                                                <span id="backupStatusMsg" class="small text-muted"></span>
+                                            </div>
+                                            <div id="backupResultMsg" class="small mt-2"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="row g-4 mt-1 d-none" id="archiveCardWrap">
+                                <div class="col-12">
+                                    <div class="card border-0 shadow-sm border-warning">
+                                        <div class="card-body">
+                                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                                <h6 class="card-title mb-0"><i class="fa-solid fa-box-archive me-2"></i>أرشفة التقارير القديمة</h6>
+                                            </div>
+                                            <div class="small text-muted mb-3">
+                                                ينقل هذا الإجراء التقارير الأقدم من عدد الأشهر المحدد (وكل بياناتها المرتبطة: المبيعات، مبيعات المنافس، المصاريف، المروجون، وحركات سحب/مرتجع المواد) إلى أوراق أرشيف منفصلة، ويُفرغ الكاش فوراً بعدها. يُنصح بتنفيذه دورياً (مثلاً مرة كل شهر) للحفاظ على سرعة الموقع.
+                                            </div>
+                                            <div class="d-flex gap-2 align-items-end flex-wrap">
+                                                <div>
+                                                    <label class="form-label small mb-1">أرشفة التقارير الأقدم من (بالأشهر)</label>
+                                                    <input type="number" id="archiveMonthsInput" class="form-control form-control-sm" style="width:120px;" value="1" min="1" step="1">
+                                                </div>
+                                                <button class="btn btn-sm btn-warning" id="archiveOldReportsBtn">
+                                                    <i class="fa-solid fa-box-archive me-1"></i>أرشفة الآن
+                                                </button>
+                                            </div>
+                                            <div id="archiveResultMsg" class="small mt-2"></div>
+
+                                            <!-- V69.1: أرشفة سجلات الدوام كخيار منفصل -->
+                                            <hr class="my-3">
+                                            <div class="d-flex gap-2 align-items-end flex-wrap">
+                                                <div>
+                                                    <label class="form-label small mb-1">أرشفة سجلات الدوام الأقدم من (بالأشهر)</label>
+                                                    <input type="number" id="archiveAttendanceMonthsInput" class="form-control form-control-sm" style="width:120px;" value="3" min="1" step="1">
+                                                </div>
+                                                <button class="btn btn-sm btn-outline-warning" id="archiveOldAttendanceBtn">
+                                                    <i class="fa-solid fa-clock-rotate-left me-1"></i>أرشفة الدوام
+                                                </button>
+                                            </div>
+                                            <div id="archiveAttendanceResultMsg" class="small mt-2"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        <!-- ============ مصاريف دمشق وريفها (ورقة لكل يوم) ============ -->
+        <section id="view-expenses" class="d-none">
+            <div class="page-hero">
+                <div class="page-hero-inner">
+                    <div class="page-hero-icon"><i class="fa-solid fa-money-bill-transfer"></i></div>
+                    <div>
+                        <h1 class="page-hero-title">المصاريف</h1>
+                        <p class="page-hero-sub">أدخل بنود المصاريف اليومية. كل يوم يُحفظ في ورقة مستقلة داخل Google Sheets باسم <span dir="ltr">مصاريف_YYYY-MM-DD</span>، والإجمالي يُحسب تلقائياً.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="main-container">
+                <form id="expensesForm" class="needs-validation" novalidate="" autocomplete="off">
+
+                    <!-- بطاقة معلومات الورقة -->
+                    <div class="card form-card">
+                        <div class="card-header collapsible-header" data-bs-toggle="collapse" data-bs-target="#collapseExpensesInfo">
+                            <span><i class="fa-solid fa-file-invoice me-2"></i>معلومات الورقة</span>
+                            <i class="fa-solid fa-chevron-up collapse-icon"></i>
+                        </div>
+                        <div id="collapseExpensesInfo" class="collapse show">
+                            <div class="card-body">
+                                <div class="row g-3">
+                                    <div class="col-md-3">
+                                        <label class="form-label" for="expDate">التاريخ <span class="text-danger">*</span></label>
+                                        <input type="date" id="expDate" class="form-control" required="">
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label" for="expGovernorate">المحافظة <span class="text-danger">*</span></label>
+                                        <select id="expGovernorate" class="form-select" required="">
+                                            <option value="" selected="" disabled="">اختر...</option>
+                                        </select>
+                                        <!-- <div class="form-text">القائمة نفسها المستعملة في التقارير.</div> -->
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="form-label" for="expFormNumber">رقم النموذج</label>
+                                        <input type="text" id="expFormNumber" class="form-control" dir="ltr" readonly="" placeholder="No.26-09.00">
+                                        <!-- <div class="form-text">يُولَّد تلقائياً من التاريخ.</div>
+                        <div class="form-text">تُدار من تبويب «مصاريف_فهرس» في Google Sheets.</div> -->
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="expFormCode">كود النموذج</label>
+                        <input type="text" id="expFormCode" class="form-control" dir="ltr" readonly="" placeholder="TM-PT-OL.00">
+                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label">اسم ورقة Google Sheets</label>
+                                        <input type="text" id="expTabName" class="form-control" dir="ltr" readonly="" placeholder="مصاريف_2026-09-27">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label">حالة الورقة</label>
+                                        <div id="expStatusBadgeWrap"></div>
+                                    </div>
+                                    <div class="col-md-4 d-flex align-items-end">
+                                        <button type="button" id="expReloadDayBtn" class="btn btn-outline-secondary w-100">
+                                            <i class="fa-solid fa-rotate me-1"></i> تحميل بنود هذا التاريخ
+                                        </button>
+                                    </div>
+                                </div>
+                                <div id="expDayInfo" class="small text-muted mt-2" aria-live="polite"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- بطاقة بنود المصاريف -->
+                    <div class="card form-card" id="expensesCard">
+                        <div class="card-header collapsible-header" data-bs-toggle="collapse" data-bs-target="#collapseExpensesItems">
+                            <span><i class="fa-solid fa-receipt me-2"></i>بنود المصاريف</span>
+                            <i class="fa-solid fa-chevron-up collapse-icon"></i>
+                        </div>
+                        <div id="collapseExpensesItems" class="collapse show">
+                            <div class="table-responsive">
+                                <table class="table table-bordered table-hover mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>المادة</th>
+                                            <th>البيان</th>
+                                            <th style="width: 100px;">الكمية</th>
+                                            <th style="width: 150px;">السعر</th>
+                                            <th style="width: 90px;">إجراء</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="exp-items-body"></tbody>
+                                    <tfoot class="table-light fw-bold">
+                                        <tr>
+                                            <td class="text-end" colspan="3">الإجمالي:</td>
+                                            <td id="expGrandTotal">0.00</td>
+                                            <td></td>
+                                        </tr>
+                                    </tfoot>
+                                </table>
+                            </div>
+                            <div class="card-footer bg-light d-flex flex-wrap gap-2 justify-content-center">
+                                <button type="button" id="add-exp-row" class="btn btn-sm btn-outline-primary"><i class="fa-solid fa-plus"></i> إضافة بند</button>
+                                <button type="button" id="pick-exp-category" class="btn btn-sm btn-outline-success"><i class="fa-solid fa-list-check"></i> إضافة عدة بنود</button>
+                                <button type="button" id="clear-exp-rows" class="btn btn-sm btn-outline-danger"><i class="fa-solid fa-eraser"></i> تفريغ الجدول</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- بطاقة التوقيعات -->
+                    <div class="card form-card d-print-none">
+                        <div class="card-header collapsible-header" data-bs-toggle="collapse" data-bs-target="#collapseExpensesSignatures">
+                            <span><i class="fa-solid fa-layer-group me-2"></i>ملخص الورقة</span>
+                            <i class="fa-solid fa-chevron-up collapse-icon"></i>
+                        </div>
+                        <div id="collapseExpensesSignatures" class="collapse show">
+                            <div class="card-body">
+                                <div class="row g-3 align-items-center">
+                                    <div class="col-md-4">
+                                        <label class="form-label" for="expStatusSelect">حالة الورقة</label>
+                                        <select id="expStatusSelect" class="form-select" disabled="">
+                                            <option value="مسودة">مسودة</option>
+                                            <option value="معتمدة">معتمدة</option>
+                                        </select>
+                                        <!-- <div class="form-text" id="expStatusHint"></div> -->
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label" for="expEnteredBy">أدخلها</label>
+                                        <input type="text" id="expEnteredBy" class="form-control" maxlength="100" placeholder="يُملأ تلقائياً" readonly="">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label" for="expLastEdited">آخر تعديل</label>
+                                        <input type="text" id="expLastEdited" class="form-control" readonly="" placeholder="—">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="expDraftStatus" class="auto-save-indicator small text-center mb-2 d-print-none" aria-live="polite"></div>
+
+                    <div class="text-center my-4 d-flex justify-content-center gap-2 flex-wrap d-print-none">
+                        <button type="submit" class="btn btn-primary main-submit-btn"><i class="fa-solid fa-paper-plane"></i> حفظ البنود</button>
+                        <button type="button" id="expSaveMetaBtn" class="btn btn-outline-success"><i class="fa-solid fa-floppy-disk"></i> حفظ بيانات الورقة</button>
+                        <button type="button" id="expPrintBtn" class="btn btn-outline-dark exp-print-btn d-print-none"><i class="fa-solid fa-print"></i> طباعة الورقة</button>
+                    </div>
+                </form>
+
+                <!-- إدارة الأوراق (الأدمن) -->
+                <div class="card shadow-sm" id="expAdminCard" style="display:none;">
+                    <div class="card-header bg-white">
+                        <h5 class="mb-0"><i class="fa-solid fa-layer-group me-1"></i> إدارة أوراق المصاريف</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+                            <span class="small text-muted">حذف الورقة يعني أن أي إدخال لاحق بنفس اليوم سينشئ ورقة جديدة من الصفر.</span>
+                            <button type="button" id="expRefreshListBtn" class="btn btn-sm btn-outline-primary"><i class="fa-solid fa-rotate"></i> تحديث</button>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-hover align-middle">
+                                <thead>
+                                    <tr>
+                                        <th>التاريخ</th>
+                                        <th>المحافظة</th>
+                                        <th>رقم النموذج</th>
+                                        <th>البنود</th>
+                                        <th>الإجمالي</th>
+                                        <th>الحالة</th>
+                                        <th>الإجراءات</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="expSheetsTableBody">
+                                    <tr><td colspan="7" class="text-center text-muted"><i class="fa-solid fa-spinner fa-spin me-1"></i> جاري التحميل...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============ ورقة الطباعة (نفس شكل الورقة المطبوعة) ============ -->
+
+
+            <!-- نافذة اختيار المواد -->
+            <div class="modal fade" id="expCategoryModal" tabindex="-1" aria-labelledby="expCategoryModalLabel" aria-hidden="true">
+                <div class="modal-dialog modal-lg modal-dialog-centered">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="expCategoryModalLabel">إضافة عدة بنود</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="mb-3"><input type="text" id="expCategorySearch" class="form-control" placeholder="ابحث عن مادة..."></div>
+                            <div class="table-responsive">
+                                <table class="table table-hover" id="expCategoryTable">
+                                    <thead><tr><th style="width: 50px;">اختيار</th><th>المادة</th><th>عدد التكرار</th></tr></thead>
+                                    <tbody></tbody>
+                                </table>
+                            </div>
+                            <div class="form-text">حدد المادة وعدد التكرار ثم اضغط «إضافة». يمكنك تعديل الكمية والبيان في الجدول بعد الإضافة.</div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إغلاق</button>
+                            <button type="button" class="btn btn-primary" id="addSelectedExpCategoriesBtn">إضافة المحددة</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ السلف المالية ============ -->
+        <section id="view-salary" class="d-none">
+            <div class="row g-3">
+                <div class="col-lg-5">
+                    <div class="card shadow-sm">
+                        <div class="card-header bg-white">
+                            <h5 class="mb-0"><i class="fa-solid fa-hand-holding-dollar me-1"></i> تسجيل سلفة مالية</h5>
+                        </div>
+                        <div class="card-body">
+                            <form id="salaryForm" autocomplete="off">
+                                <div class="mb-3">
+                                    <label class="form-label">التاريخ</label>
+                                    <input type="date" id="salDate" class="form-control" required="">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">الموظف</label>
+                                    <select id="salEmployee" class="form-select" required="">
+                                        <option value="">اختر الموظف...</option>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">النوع</label>
+                                    <select id="salType" class="form-select" required="">
+                                        <option value="advance">سلفة</option>
+                                        <option value="loan">قرض</option>
+                                        <option value="deduction">خصم</option>
+                                    </select>
+                                </div>
+                                <div class="mb-3 d-none" id="salInstallmentsWrap">
+                                    <label class="form-label">عدد الدفعات</label>
+                                    <input type="number" id="salInstallments" class="form-control" min="1" max="10" step="1" placeholder="مثال: 4" inputmode="numeric">
+                                    <div class="form-text">للقرض فقط. من 1 إلى 10 دفعات. اتركه فارغاً إن كان يُسدّد دفعة واحدة.</div>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">المبلغ ($)</label>
+                                    <input type="number" id="salAmount" class="form-control" min="0" step="0.01" placeholder="0" required="">
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">ملاحظات</label>
+                                    <input type="text" id="salNotes" class="form-control" maxlength="200" placeholder="ملاحظات إضافية...">
+                                </div>
+                                <button type="submit" class="btn btn-primary w-100"><i class="fa-solid fa-paper-plane me-1"></i> حفظ</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-7">
+                    <div class="card shadow-sm">
+                        <div class="card-header bg-white">
+                            <h5 class="mb-0"><i class="fa-solid fa-list me-1"></i> سجل السلف المالية</h5>
+                        </div>
+                        <div class="card-body p-0">
+                            <div class="table-responsive" style="max-height: 350px; overflow-y: auto;">
+                                <table class="table table-sm table-bordered mb-0">
+                                    <thead class="table-light sticky-top">
+                                        <tr>
+                                            <th>التاريخ</th>
+                                            <th>الموظف</th>
+                                            <th>النوع</th>
+                                            <th>المبلغ</th>
+                                            <th>الدفعات</th>
+                                            <th>ملاحظات</th>
+                                            <th>بواسطة</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="salHistoryBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card shadow-sm mt-3">
+                        <div class="card-header bg-white">
+                            <h5 class="mb-0"><i class="fa-solid fa-chart-pie me-1"></i> أرصدة الموظفين</h5>
+                        </div>
+                        <div class="card-body p-0">
+                            <div class="table-responsive">
+                                <table class="table table-sm table-bordered mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>الموظف</th>
+                                            <th>الرصيد الحالي</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="salTotalBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ إدارة المستخدمين (V68) ============ -->
+        <section id="view-users" class="d-none">
+            <div class="card shadow-sm">
+                <div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2">
+                    <h5 class="mb-0"><i class="fa-solid fa-users-gear me-1"></i> إدارة المستخدمين والصلاحيات</h5>
+                    <button type="button" class="btn btn-primary btn-sm" id="addUserBtn"><i class="fa-solid fa-user-plus me-1"></i> مستخدم جديد</button>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <input type="search" id="usersSearchInput" class="form-control" placeholder="بحث بالاسم أو اسم الدخول...">
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle" id="usersTable">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>الاسم</th>
+                                    <th>اسم الدخول</th>
+                                    <th>الصلاحية</th>
+                                    <th>المهمة</th>
+                                    <th>المدير المسؤول</th>
+                                    <th>الإجراءات</th>
+                                </tr>
+                            </thead>
+                            <tbody id="usersTableBody">
+                                <tr><td colspan="7" class="text-center text-muted"><i class="fa-solid fa-spinner fa-spin me-1"></i> جاري التحميل...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div id="usersStatusMsg" class="small mt-2"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ نافذة مستخدم جديد / تعديل (V68) ============ -->
+        <div class="modal fade" id="userModal" tabindex="-1" aria-labelledby="userModalLabel" aria-hidden="true">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <form id="userForm" autocomplete="off">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="userModalLabel">مستخدم جديد</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <input type="hidden" id="userFormId">
+                            <div class="mb-3">
+                                <label class="form-label">الاسم الكامل</label>
+                                <input type="text" class="form-control" id="userNameInput" required="" maxlength="100" autocomplete="off">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">اسم الدخول</label>
+                                <input type="text" class="form-control" id="userUsernameInput" required="" minlength="3" maxlength="50" autocomplete="off">
+                                <div class="form-text">حروف إنجليزية، أرقام، أو ._- فقط (٣-٥٠ خانة). لا يمكن تغييره بعد الإنشاء.</div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">كلمة المرور</label>
+                                <input type="password" class="form-control" id="userPasswordInput" autocomplete="new-password">
+                                <div class="form-text" id="userPasswordHint">كلمة مرور جديدة (٤ أحرف على الأقل). تُترك فارغة عند التعديل للإبقاء على الحالية.</div>
+                            </div>
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label class="form-label">الصلاحية</label>
+                                    <select class="form-select" id="userRoleInput">
+                                        <option value="user">مستخدم (إدخال فقط)</option>
+                                        <option value="manager">مدير</option>
+                                        <option value="auditor">مدقق</option>
+                                        <option value="admin">إداري</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label">المهمة</label>
+                                    <input type="text" class="form-control" id="userJobInput" maxlength="100" placeholder="مثال: مروج، منسق نقطة، مسؤول جرد">
+                                </div>
+                            </div>
+                            <div class="mt-3">
+                                <label class="form-label">المدير المسؤول</label>
+                                <input type="text" class="form-control" id="userManagerInput" maxlength="100" placeholder="الاسم أو الجهة المسؤولة">
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">إلغاء</button>
+                            <button type="submit" class="btn btn-primary" id="saveUserBtn"><i class="fa-solid fa-floppy-disk me-1"></i> حفظ</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        </main>
+    </div>
+
+<!-- defer: هذه الأربعة كانت بلا defer فتوقف تحليل الصفحة عندها، فلا يُرسم شيء
+     ولا يُربط نموذج الدخول حتى تُنزَّل ~440 كيلوبايت من ثلاثة أصول خارجية. الـdefer
+     يحفظ ترتيب التنفيذ نفسه (jQuery قبل Select2 وقبل core.js) لكنه لا يحجب الرسم. -->
+
+
+
+<!-- Chart.js (~205KB) أُزيل من مسار أول تحميل: لا تحتاجه إلا شاشة التحليلات.
+     يجلبه ensureChartLib() في core.js عند فتح التحليلات (ويُدفَّأ مسبقاً في
+     الخلفية لأصحاب الصلاحية)، فيسقط ثلث الحمولة عن شاشة الدخول وبقية الشاشات. -->
+    <script src="core.js" defer=""></script>
+    <script src="page-login.js" defer=""></script>
+    <script src="page-reports.js" defer=""></script>
+    <script src="page-expenses.js" defer=""></script>
+    <script src="page-history.js" defer=""></script>
+    <script src="page-movement.js" defer=""></script>
+    <script src="page-attendance.js" defer=""></script>
+<script src="page-dashboard.js" defer=""></script>
+<script src="page-users.js" defer=""></script>
+<script src="page-salary.js" defer=""></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => navigator.serviceWorker.register('./service-worker.js').catch(console.warn));
+        }
+    </script>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  var sp = document.getElementById('app-splash'); if (sp) sp.remove();
+  var lg = document.getElementById('view-login'); if (lg) lg.style.display = 'none';
+  var sh = document.getElementById('app-shell'); if (sh) sh.classList.remove('d-none');
+  ['view-reports','view-history','view-expenses','view-users','view-salary','view-attendance','view-movement','view-dashboard'].forEach(function (id) {
+    var el = document.getElementById(id); if (el) el.classList.add('d-none');
+  });
+  var want = document.getElementById('view-reports');
+  if (want) want.classList.remove('d-none');
+  var nav = document.getElementById('mainNav'); if (nav) nav.classList.add('show');
+});
+</script>
+
+<script>
+function dshRect(el) {
+  var r = el.getBoundingClientRect();
+  return { x: Math.round(r.left), y: Math.round(r.top + window.scrollY), w: Math.round(r.width), h: Math.round(r.height) };
+}
+function dshSel(s) { var el = document.querySelector(s); return el ? dshRect(el) : null; }
+function dshVis(el) {
+  if (!el || !el.getBoundingClientRect) return false;
+  var cs = getComputedStyle(el);
+  if (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) === 0) return false;
+  var r = el.getBoundingClientRect();
+  return r.width > 0 && r.height > 0;
+}
+function dshName(el) {
+  var cls = (typeof el.className === 'string' && el.className.trim())
+    ? '.' + el.className.trim().split(/\s+/).slice(0, 3).join('.') : '';
+  return el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + cls;
+}
+function dshReport() {
+  var vw = window.innerWidth, vh = window.innerHeight;
+  var out = {
+    vw: vw, vh: vh,
+    docW: document.documentElement.scrollWidth,
+    docH: document.documentElement.scrollHeight,
+    hOverflow: document.documentElement.scrollWidth - vw
+  };
+  out.key = {
+    navbar: dshSel('.navbar'), brand: dshSel('.navbar-brand'), toggler: dshSel('.navbar-toggler'),
+    mainNav: dshSel('#mainNav'), navList: dshSel('.navbar-nav'), navControls: dshSel('#mainNav > .d-flex'),
+    hero: dshSel('.page-hero-inner'), main: dshSel('.main-container'),
+    card: dshSel('.main-container .card'), loginForm: dshSel('.login-form'), loginCard: dshSel('.login-container')
+  };
+
+  // (1) anything pushed outside the viewport horizontally
+  var off = [];
+  document.querySelectorAll('body *').forEach(function (el) {
+    if (!dshVis(el)) return;
+    if (getComputedStyle(el).position === 'fixed') return;
+    var r = el.getBoundingClientRect();
+    var over = Math.round(r.right - vw), under = Math.round(-r.left);
+    if (over > 1 || under > 1) off.push({ t: dshName(el), over: over, under: under, w: Math.round(r.width) });
+  });
+  out.overflow = off.slice(0, 30);
+  out.overflowCount = off.length;
+
+  // (2) horizontally overflowing text boxes (content wider than its box)
+  var clip = [];
+  document.querySelectorAll('body *').forEach(function (el) {
+    if (!dshVis(el)) return;
+    if (el.scrollWidth - el.clientWidth <= 2) return;
+    var cs = getComputedStyle(el);
+    if (cs.overflowX === 'auto' || cs.overflowX === 'scroll' || cs.overflow === 'auto' || cs.overflow === 'scroll') return;
+    if (cs.overflowX === 'hidden' || cs.overflow === 'hidden') return;
+    clip.push({ t: dshName(el), sw: el.scrollWidth, cw: el.clientWidth });
+  });
+  out.clipped = clip.slice(0, 20);
+  out.clippedCount = clip.length;
+
+  // (3) sibling overlap inside the same row (the classic "unformatted" look)
+  var overlaps = [];
+  function scan(container) {
+    var kids = [].slice.call(container.children).filter(dshVis);
+    for (var i = 0; i < kids.length; i++) {
+      for (var j = i + 1; j < kids.length; j++) {
+        var a = kids[i].getBoundingClientRect(), b = kids[j].getBoundingClientRect();
+        var ox = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+        var oy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+        if (ox > 2 && oy > 2) {
+          overlaps.push({ parent: dshName(container), a: dshName(kids[i]), b: dshName(kids[j]), ox: Math.round(ox), oy: Math.round(oy) });
+        }
+      }
+    }
+  }
+  ['.navbar .container-fluid', '#mainNav', '.navbar-nav', '.row', '.card-header', '.d-flex', '.page-hero-inner', '.login-form'].forEach(function (s) {
+    document.querySelectorAll(s).forEach(function (c) { if (dshVis(c)) scan(c); });
+  });
+  out.overlaps = overlaps.slice(0, 20);
+  out.overlapCount = overlaps.length;
+
+  // (4) navbar / controls geometry, row by row
+  var nb = document.querySelector('.navbar .container-fluid');
+  if (nb) {
+    out.navChildren = [];
+    Array.prototype.forEach.call(nb.children, function (c) {
+      if (!dshVis(c)) return;
+      var r = c.getBoundingClientRect();
+      out.navChildren.push({ t: dshName(c), row: Math.round(r.top), x: Math.round(r.left), w: Math.round(r.width), h: Math.round(r.height) });
+    });
+  }
+  var links = [].slice.call(document.querySelectorAll('.navbar-nav .nav-link')).filter(dshVis);
+  out.navLinkRows = {};
+  links.forEach(function (l) {
+    var k = Math.round(l.getBoundingClientRect().top);
+    out.navLinkRows[k] = (out.navLinkRows[k] || 0) + 1;
+  });
+  out.navLinkCount = links.length;
+  var controls = document.querySelector('#mainNav > .d-flex');
+  if (controls && dshVis(controls)) {
+    out.controlRow = { w: Math.round(controls.getBoundingClientRect().width), wrap: getComputedStyle(controls).flexWrap, children: [] };
+    [].forEach.call(controls.children, function (c) {
+      if (!dshVis(c)) return;
+      var r = c.getBoundingClientRect();
+      out.controlRow.children.push({ t: dshName(c), row: Math.round(r.top), x: Math.round(r.left), w: Math.round(r.width) });
+    });
+  }
+
+  out.tables = [].slice.call(document.querySelectorAll('.table-responsive')).filter(dshVis).map(function (t) {
+    var r = t.getBoundingClientRect();
+    return { w: Math.round(r.width), sw: t.scrollWidth };
+  });
+
+  var main = document.querySelector('.main-container');
+  if (main && dshVis(main)) {
+    var mr = main.getBoundingClientRect();
+    out.mainFit = { w: Math.round(mr.width), x: Math.round(mr.left), fill: +(mr.width / vw).toFixed(3) };
+  }
+  var lf = document.querySelector('.login-form');
+  if (lf && dshVis(lf)) {
+    var lr = lf.getBoundingClientRect();
+    out.loginFit = { w: Math.round(lr.width), h: Math.round(lr.height), top: Math.round(lr.top), bottom: Math.round(lr.bottom), fits: lr.top >= 0 && lr.bottom <= vh, bodyScrollH: document.body.scrollHeight };
+  }
+
+  var d = document.getElementById('dsh-diag');
+  if (d) d.textContent = 'DSHDIAG_START' + JSON.stringify(out) + 'DSHDIAG_END';
+}
+window.addEventListener('load', function () { setTimeout(function () { try { dshReport(); } catch (e) {} }, 500); });
+setTimeout(function () { try { dshReport(); } catch (e) {} }, 2500);
+</script>
+
+</body></html>
+

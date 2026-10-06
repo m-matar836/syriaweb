@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 120" width="160" height="120" role="img" aria-label="ملاحظات البن">
+  <defs>
+    <linearGradient id="beanBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fef3c7"/>
+      <stop offset="1" stop-color="#fde68a"/>
+    </linearGradient>
+  </defs>
+  <rect width="160" height="120" fill="url(#beanBg)"/>
+  <g fill="none" stroke="#b45309" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M52 34h44a10 10 0 0 1 10 10v26a26 26 0 0 1-52 0V44a10 10 0 0 1 10-10Z"/>
+    <path d="M106 44h10a14 14 0 0 1 0 28h-10"/>
+    <path d="M62 26c-6 6-6 12 0 18M84 26c6 6 6 12 0 18"/>
+  </g>
+</svg>

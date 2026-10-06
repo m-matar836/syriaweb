@@ -1,0 +1,46 @@
+{
+  "name": "لوحة التحكم الميدانية",
+  "short_name": "لوحة التحكم",
+  "description": "لوحة تحكم ميدانية للتقارير والمصاريف والدوام — تعمل بدون إنترنت",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "./index.html#/reports",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f3f6ff",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "إدخال تقرير جديد",
+      "short_name": "تقرير جديد",
+      "url": "./index.html#/reports",
+      "icons": [{ "src": "icons/icon.svg", "sizes": "any" }]
+    },
+    {
+      "name": "المصاريف",
+      "short_name": "المصاريف",
+      "url": "./index.html#/expenses",
+      "icons": [{ "src": "icons/icon.svg", "sizes": "any" }]
+    },
+    {
+      "name": "التحليلات",
+      "short_name": "التحليلات",
+      "url": "./index.html#/dashboard"
+    }
+  ]
+}
