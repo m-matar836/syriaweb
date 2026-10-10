@@ -8,7 +8,8 @@
 // v73: إزالة حجب الرسم عن سكربتات CDN (defer)، وجلب Chart.js عند فتح التحليلات فقط.
 // v74: تسريع المصادقة وتحسين Mobile/Tablet responsive layout.
 // v75: history pagination + browser API cache for report pages.
-const CACHE_NAME = 'festival-app-v75-perf-paging';
+// v76: show per-user last-point restore and write reports to IndexedDB before sending.
+const CACHE_NAME = 'festival-app-v76-offline-report-retention';
 const APP_SHELL = [
   './index.html',
   './style.css','./core.js','./page-login.js','./page-reports.js','./page-expenses.js','./page-history.js','./page-dashboard.js','./page-movement.js','./page-attendance.js','./page-users.js','./page-salary.js','./manifest.json','./icons/icon.svg',

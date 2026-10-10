@@ -49,6 +49,7 @@ async function openReportsView() {
   const memo = new Map();
   let activate = null;
   const posts = [];
+  const persistenceEvents = [];
   const focusCalls = [];
 
   const c = loadClient('page-reports.js', {
@@ -72,12 +73,22 @@ async function openReportsView() {
       s.formStateKey = () => 'reportFormState::boss';
       s.reportToEditKey = () => 'reportToEdit::boss';
       s.queryFromHash = () => new URLSearchParams('');
-      s.queueReportOffline = async () => ({ queued: true });
+      s.queueReportOffline = async (reportData) => {
+        persistenceEvents.push({ type: 'queued', reportData });
+        return 'pending-report-test';
+      };
+      s.removePendingReport = async (localId) => {
+        persistenceEvents.push({ type: 'removed', localId });
+      };
       s.invalidateReportsCache = () => {};
       s.refreshAppCache = async () => ({ ok: true });
       s.updateOfflineStatus = () => {};
       s.apiGet = async () => ({ status: 'success' });
-      s.apiPost = async (action) => { posts.push(action); return { status: 'success', reportId: 1 }; };
+      s.apiPost = async (action) => {
+        posts.push(action);
+        persistenceEvents.push({ type: 'sent', action });
+        return { status: 'success', reportId: 1 };
+      };
       s.getStoredUser = () => ({ id: 'E9', role: 'admin', name: 'المشرف أ', username: 'boss' });
       s.navigateTo = () => {};
       s.showToast = () => {};
@@ -91,6 +102,7 @@ async function openReportsView() {
         if (!els[id]) {
           els[id] = originalGet(id);
           if (id === 'reportForm') els[id].checkValidity = () => true;
+          if (id === 'restoreLastPointBtn') els[id].classList.add('d-none');
           // populateSelect() reads the «اختر...» placeholder out of the markup
           // before it rewrites the options, so a bare stub select throws.
           if (PLACEHOLDER_SELECTS.includes(id)) {
@@ -112,7 +124,7 @@ async function openReportsView() {
   assert.equal(typeof activate, 'function', 'page-reports.js must register the reports view');
   await activate();
   els.promotersTbody = memo.get('q:#promotersSelectionTable tbody');
-  return { els, c, posts, focusCalls, memo };
+  return { els, c, posts, persistenceEvents, focusCalls, memo };
 }
 
 /** Choose a coordinator the way the select does, and let listeners run. */
@@ -140,8 +152,20 @@ test('promoters are required: an empty field blocks the submit', async () => {
     'a report with nobody present at the point must not reach the server');
 });
 
+test('last-point restore button is shown on the report screen for every employee', async () => {
+  const { els } = await openReportsView();
+
+  assert.ok(!els.restoreLastPointBtn.classList.contains('d-none'),
+    'the restore action stays visible even before this account has saved its first point');
+
+  els.campaign.value = 'حملة تجريبية';
+  els.reportForm.dispatch('change');
+  assert.ok(!els.restoreLastPointBtn.classList.contains('d-none'),
+    'choosing a campaign must not hide the restore action');
+});
+
 test('promoters are required: picking at least one person lets the submit through', async () => {
-  const { els, posts } = await openReportsView();
+  const { els, posts, persistenceEvents } = await openReportsView();
 
   pickPromoters(els, ['أحمد المروج']);
   els.reportForm.dispatch('submit', { preventDefault() {}, stopPropagation() {} });
@@ -149,6 +173,10 @@ test('promoters are required: picking at least one person lets the submit throug
 
   assert.ok(posts.includes('submitReport'),
     'a report naming who was present must be saveable, calls: ' + posts.join(', '));
+  assert.deepEqual(persistenceEvents.map(event => event.type), ['queued', 'sent', 'removed'],
+    'the complete report must be durably queued before sending, and removed only after acknowledgement');
+  assert.ok(persistenceEvents[0].reportData.id,
+    'the durable copy includes the report id needed for safe retry');
 });
 
 test('the missing-people error points the user at the people button', async () => {

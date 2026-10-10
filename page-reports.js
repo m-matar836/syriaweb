@@ -235,27 +235,71 @@ async function handleReportPage() {
         setTimeout(() => document.querySelectorAll('.confetti-piece').forEach(p => p.remove()), 5200);
     };
 
-    // استعادة آخر نقطة — يحفظ موقع آخر تقرير ناجح أثناء الإرسال.
+    // استعادة آخر نقطة — يحفظ بيانات سياق النقطة لصاحب الحساب الحالي.
     const lastPointKey = () => ownerScopedKey('lastReportPoint');
     const restoreLastPointBtn = document.getElementById('restoreLastPointBtn');
     const refreshRestoreBtn = () => {
         if (!restoreLastPointBtn) return;
-        restoreLastPointBtn.classList.toggle('d-none', !localStorage.getItem(lastPointKey()) || !!campaignSelect.value);
+        // يظهر لكل موظف؛ بيانات النقطة نفسها تبقى منفصلة لكل حساب.
+        restoreLastPointBtn.classList.remove('d-none');
     };
-    const saveLastPoint = () => {
-        const gov = $('#governorate').val(), region = $('#region').val(), market = $('#market_name').val();
-        if (!gov || !market) return;
+    const saveLastPoint = (reportData) => {
+        const source = reportData || {
+            governorate: $('#governorate').val(),
+            region: $('#region').val(),
+            market: $('#market_name').val(),
+            campaign: $('#campaign').val(),
+            event: $('#event').val(),
+            eventDays: document.getElementById('eventDays').value,
+            coordinator: $('#coordinator').val(),
+            inventoryDependency: $('#inventoryDependency').val(),
+            supervisor: supervisorInput.value,
+            phoneNumber: document.getElementById('phoneNumber')?.value || '',
+            latitude: document.getElementById('latitude')?.value || '',
+            longitude: document.getElementById('longitude')?.value || ''
+        };
+        const point = {
+            governorate: source.governorate || '',
+            region: source.region || '',
+            market: source.market || '',
+            campaign: source.campaign || '',
+            event: source.event || '',
+            eventDays: source.eventDays || '1',
+            coordinator: source.coordinator || '',
+            inventoryDependency: source.inventoryDependency || '',
+            supervisor: source.supervisor || '',
+            phoneNumber: source.phoneNumber || '',
+            latitude: source.latitude || '',
+            longitude: source.longitude || ''
+        };
+        if (!point.governorate || !point.market) return;
         localStorage.setItem(lastPointKey(), JSON.stringify({
-            governorate: gov, region: region || '', market: market,
-            campaign: $('#campaign').val() || '', event: $('#event').val() || '',
-            eventDays: document.getElementById('eventDays').value || '1',
-            coordinator: $('#coordinator').val() || '', inventoryDependency: $('#inventoryDependency').val() || ''
+            ...point,
+            savedAt: Date.now()
         }));
+        refreshRestoreBtn();
     };
     const applyLastPoint = () => {
         let last;
         try { last = JSON.parse(localStorage.getItem(lastPointKey()) || ''); } catch (e) { return; }
-        if (!last) return;
+        if (!last) {
+            showToast('لا توجد نقطة محفوظة لهذا الحساب بعد.', true);
+            return;
+        }
+        const currentForm = getFormState();
+        const hasUnsavedTransactions = [
+            ...(currentForm.sales || []),
+            ...(currentForm.salesOfCompetitor || []),
+            ...(currentForm.expenses || [])
+        ].some(item =>
+            String(item.product || item.item || '').trim() ||
+            Number(item.quantity || 0) > 0 ||
+            Number(item.price || 0) > 0
+        );
+        if (hasUnsavedTransactions) {
+            showToast('أرسل التقرير الحالي أولاً؛ استعادة النقطة لا تستبدل المبيعات أو المصاريف غير المحفوظة.', true);
+            return;
+        }
         stateRestoring = true;
         if (last.governorate) $('#governorate').val(last.governorate).trigger('change');
         if (last.region) $('#region').val(last.region).trigger('change');
@@ -265,6 +309,9 @@ async function handleReportPage() {
         if (last.eventDays) document.getElementById('eventDays').value = last.eventDays;
         if (last.coordinator) $('#coordinator').val(last.coordinator).trigger('change');
         if (last.inventoryDependency) $('#inventoryDependency').val(last.inventoryDependency).trigger('change');
+        if (last.supervisor) supervisorInput.value = last.supervisor;
+        if (document.getElementById('phoneNumber')) document.getElementById('phoneNumber').value = last.phoneNumber || '';
+        applyGpsToFields(last.latitude, last.longitude);
         const dateEl = document.getElementById('date');
         if (dateEl && !dateEl.value) dateEl.value = new Date().toISOString().slice(0, 10);
         updateSalesVisibility();
@@ -1089,9 +1136,10 @@ async function handleReportPage() {
             return;
         }
 
-        const reportData = getFormState();
+        const submittedDraft = getFormState();
+        const submittedDraftSnapshot = JSON.stringify(submittedDraft);
+        const reportData = { ...submittedDraft };
         isFormDirty = false;
-        localStorage.removeItem(formStateKey()); 
         
         reportData.id = editId || Date.now();
         reportData.createdAt = editId ? originalCreatedAt : new Date().toLocaleString('ar-EG');
@@ -1119,8 +1167,6 @@ async function handleReportPage() {
         }
         
         if (addAnother) {
-            // [تصحيح] استدعاء دالة إعادة التعيين الكاملة
-            resetFullForm(); 
             showToast('التقرير قيد الحفظ في الخلفية...');
         } else {
             document.querySelector('#successModal .fs-5').textContent = 'التقرير قيد الحفظ في الخلفية...';
@@ -1130,13 +1176,43 @@ async function handleReportPage() {
         }
         
         const saveOnlineOrQueue = async () => {
+            // اكتب التقرير كاملاً في IndexedDB قبل أي طلب شبكة أو تفريغ للنموذج،
+            // كي لا يضيع إذا أُغلق التطبيق قبل تأكيد الخادم.
+            let pendingLocalId = '';
+            try {
+                pendingLocalId = await queueReportOffline(reportData, { registerSync: false });
+                try {
+                    if (localStorage.getItem(formStateKey()) === submittedDraftSnapshot) {
+                        localStorage.removeItem(formStateKey());
+                    }
+                } catch (e) { /* يبقى التقرير كاملاً في IndexedDB */ }
+                if (addAnother) resetFullForm();
+            } catch (storageError) {
+                // لا نمنع الإرسال المتصل في متصفح لا يدعم IndexedDB؛ تبقى
+                // المسودة المحلية حتى ينجح الإرسال. دون اتصال لا نمسحها أبداً.
+                if (!navigator.onLine) throw storageError;
+                console.warn('تعذر إنشاء نسخة انتظار محلية قبل الإرسال:', storageError);
+            }
+
             if (!navigator.onLine) {
-                await queueReportOffline(reportData);
-                return { queued: true };
+                if (!pendingLocalId) throw new Error('تعذر حفظ التقرير محلياً؛ لم تُحذف المسودة. أعد المحاولة عند توفر التخزين.');
+                registerBackgroundSync();
+                return { queued: true, localId: pendingLocalId };
             }
             try {
                 const result = await apiPost('submitReport', reportData);
                 if (!result || result.status !== 'success') throw new Error(result?.message || 'فشل الحفظ');
+                if (pendingLocalId) {
+                    try { await removePendingReport(pendingLocalId); }
+                    catch (cleanupError) { console.warn('Report sent; pending copy cleanup will retry:', cleanupError); }
+                } else {
+                    try {
+                        if (localStorage.getItem(formStateKey()) === submittedDraftSnapshot) {
+                            localStorage.removeItem(formStateKey());
+                        }
+                    } catch (e) {}
+                    if (addAnother) resetFullForm();
+                }
                 // Do NOT rebuild the whole master-data cache after every report.
                 // Reports do not change Products/Locations/Employees, so a full refresh here
                 // only adds a large network round-trip and JSON parsing cost. The server
@@ -1150,16 +1226,19 @@ async function handleReportPage() {
                 const networkFailure = !navigator.onLine || error instanceof TypeError ||
                     /failed to fetch|network|load failed/i.test(String(error.message || ''));
                 if (networkFailure) {
-                    await queueReportOffline(reportData);
-                    return { queued: true };
+                    if (pendingLocalId) {
+                        registerBackgroundSync();
+                        return { queued: true, localId: pendingLocalId };
+                    }
                 }
+                // حتى أخطاء الخادم لا تحذف النسخة المحلية؛ تبقى ظاهرة في قائمة المزامنة.
                 throw error;
             }
         };
 
         saveOnlineOrQueue()
             .then(result => {
-                if (!result.queued) saveLastPoint();
+                saveLastPoint(reportData);
                 if (result.queued) {
                     updateOfflineStatus();
                     if (addAnother) {

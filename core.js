@@ -163,7 +163,7 @@ async function forceLogout(message) {
     navigateTo('login');
 }
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx4bM-V9-M2H6l_pl8iwjpPeP9N110P951qaW2rQAumh5omgajFP0NRHdvlSkv-Nqtp/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbydC0vB8dFuoIWNTt1Ma_m-YHYvVo_YonReI4JyytW5QbmdayqB9DcCz9Mr7TrRu-g/exec";
 const CACHE_DURATION_MINUTES = 1440;
 // V70: مسودّات المستخدم مربوطة بهويته. لو بقيت بمفتاح واحد لصاحب الجلسة
 // السابقة استعاد مستخدمٌ آخر مسودّة غيره (أو النقطة الأخيرة التي اختارها).
@@ -920,18 +920,36 @@ function openOfflineDB() {
     });
 }
 
-async function queueReportOffline(reportData) {
+async function queueReportOffline(reportData, options = {}) {
     const db = await openOfflineDB();
+    const localId = `${reportData.id}_${Date.now()}`;
     return new Promise((resolve, reject) => {
         const tx = db.transaction(OFFLINE_QUEUE_STORE, 'readwrite');
         tx.objectStore(OFFLINE_QUEUE_STORE).put({
-            localId: `${reportData.id}_${Date.now()}`,
+            localId,
             reportData,
             createdAt: Date.now()
         });
-        tx.oncomplete = () => { db.close(); resolve(); registerBackgroundSync(); };
+        tx.oncomplete = () => {
+            db.close();
+            resolve(localId);
+            if (options.registerSync !== false) registerBackgroundSync();
+        };
         tx.onerror = () => { db.close(); reject(tx.error); };
     });
+}
+
+// اطلب من المتصفح إبقاء بيانات التطبيق المثبّت وقائمة المزامنة عند ضغط مساحة
+// التخزين. الطلب أفضل محاولة ولا يغيّر السلوك في المتصفحات التي لا تدعمه.
+async function requestOfflineStoragePersistence() {
+    try {
+        const storage = navigator.storage;
+        if (!storage || typeof storage.persist !== 'function') return false;
+        if (typeof storage.persisted === 'function' && await storage.persisted()) return true;
+        return await storage.persist();
+    } catch (e) {
+        return false;
+    }
 }
 
 async function getPendingReports() {
@@ -1224,6 +1242,7 @@ pendingSyncTimer = setInterval(runPendingSyncIfNeeded, 300000);
 document.addEventListener('DOMContentLoaded', () => {
     setupCacheRefreshButtons();
     setupDataSyncTriggerButton();
+    requestOfflineStoragePersistence();
     setTimeout(() => { updateOfflineStatus(); syncPendingReports(); syncPendingAttendance(); syncPendingMovements(); }, 500);
 });
 
@@ -1926,6 +1945,14 @@ function downloadTextFile(filename, content, mimeType) {
 
 // نجمع الكروت عبر data attribute بدل الروابط: نص anchor قابل للتغيير،
 // لكن اسم الـ route في data-* هو ما يربطه بالراوت.
+// تعريف routes الشكاوى التي يشير إليها HTML (الملف المرفق لم يتضمن
+// التعريف الذي كان core.js يحتاجه عند الإقلاع).
+const COMPLAINTS_CARDS = [
+    { route: 'complaints-opinion', view: 'view-complaints-opinion', body: 'complaintsOpinionBody' },
+    { route: 'complaints-bean', view: 'view-complaints-bean', body: 'complaintsBeanBody' },
+    { route: 'complaints-site', view: 'view-complaints-site', body: 'complaintsSiteBody' }
+];
+
 function complaintsCardElements() {
     return Array.prototype.slice.call(
         document.querySelectorAll('#view-complaints [data-complaint-card]')
