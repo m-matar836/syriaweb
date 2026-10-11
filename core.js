@@ -163,7 +163,7 @@ async function forceLogout(message) {
     navigateTo('login');
 }
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbydC0vB8dFuoIWNTt1Ma_m-YHYvVo_YonReI4JyytW5QbmdayqB9DcCz9Mr7TrRu-g/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx9BqnSe9DGQZFDDpjxmi1KZOox_5Jp4LCrjltPo5eIeZQ5NXA8A6N58TT9tLIdl1wQ/exec";
 const CACHE_DURATION_MINUTES = 1440;
 // V70: مسودّات المستخدم مربوطة بهويته. لو بقيت بمفتاح واحد لصاحب الجلسة
 // السابقة استعاد مستخدمٌ آخر مسودّة غيره (أو النقطة الأخيرة التي اختارها).
@@ -249,6 +249,7 @@ const USER_SCOPED_CACHE_PREFIXES = [
     'reportFormLastState', 'reportToEdit',
     'entryFeedSeen_v1::',
     'salaryAdvances::',
+    'userProductPrices::',
 ];
 
 /** يبني مفتاح كاش لا يشارك فيه إلا صاحب هذه الجلسة. */
@@ -941,16 +942,33 @@ async function queueReportOffline(reportData, options = {}) {
 
 // اطلب من المتصفح إبقاء بيانات التطبيق المثبّت وقائمة المزامنة عند ضغط مساحة
 // التخزين. الطلب أفضل محاولة ولا يغيّر السلوك في المتصفحات التي لا تدعمه.
+let offlineStoragePersisted = false;
+let offlinePersistenceRequest = null;
 async function requestOfflineStoragePersistence() {
-    try {
-        const storage = navigator.storage;
-        if (!storage || typeof storage.persist !== 'function') return false;
-        if (typeof storage.persisted === 'function' && await storage.persisted()) return true;
-        return await storage.persist();
-    } catch (e) {
-        return false;
-    }
+    if (offlineStoragePersisted) return true;
+    if (offlinePersistenceRequest) return offlinePersistenceRequest;
+    offlinePersistenceRequest = (async () => {
+        try {
+            const storage = navigator.storage;
+            if (!storage || typeof storage.persist !== 'function') return false;
+            if (typeof storage.persisted === 'function' && await storage.persisted()) return true;
+            return await storage.persist();
+        } catch (e) {
+            return false;
+        }
+    })();
+    const result = await offlinePersistenceRequest;
+    offlineStoragePersisted = result === true;
+    // If a browser declined before the user interacted, allow one more request
+    // after a real gesture rather than treating that early decline as final.
+    if (!offlineStoragePersisted) offlinePersistenceRequest = null;
+    return offlineStoragePersisted;
 }
+// Request durable origin storage again after real user engagement. The first
+// DOMContentLoaded request is often too early for mobile browsers to grant it.
+['pointerdown', 'keydown'].forEach(type => {
+    document.addEventListener(type, () => { requestOfflineStoragePersistence(); }, { once: true, passive: true });
+});
 
 async function getPendingReports() {
     const db = await openOfflineDB();
@@ -1698,9 +1716,8 @@ function clearServiceWorkerApiCache(timeoutMs = 3000) {
  * @param {object}  [opts]
  * @param {boolean} [opts.silent]         suppress the alert on failure
  * @param {boolean} [opts.refreshReports] also pull reports/attendance/movements.
- *   Defaults to true. Callers that only changed master data — e.g. a product
- *   price edit, which page-reports.js debounces at 120ms — pass false, otherwise
- *   every keystroke in the sales table re-downloaded the whole site.
+ *   Defaults to true. Personal product-price changes are saved by user and do
+ *   not trigger this whole-site refresh, avoiding repeated downloads while typing.
  */
 async function refreshAppCache({ silent = false, refreshReports = true } = {}) {
     if (cacheRefreshInProgress) return { ok: false, busy: true };
@@ -1725,6 +1742,9 @@ async function refreshAppCache({ silent = false, refreshReports = true } = {}) {
             requests.push(apiGet('getUserFestivalMovements',{userId:u,role:r,targetUserId:u}));
             requests.push(apiGet('getAttendance',{userId:u,role:r,userName:n,targetUserId:u}));
             requests.push(apiGet('getStatusOptions'));
+            // أسعار المنتجات الشخصية مستقلة عن بيانات Products المشتركة؛ تُحدّث
+            // عند طلب التحديث الكامل من دون تسريبها إلى كاش مستخدم آخر.
+            requests.push(apiGet('getUserProductPrices'));
         }
         const settled = await Promise.allSettled(requests);
         const first = settled[0];
@@ -1747,6 +1767,10 @@ async function refreshAppCache({ silent = false, refreshReports = true } = {}) {
         }
         const results = settled.map(s => s.status === 'fulfilled' ? s.value : null);
         if(currentUser && refreshReports && Array.isArray(results[1])) { const _uid = String(currentUser.id || currentUser.username || ''); saveReportsCacheEntry(reportsScopeKey({userId:_uid,role:currentUser.role,targetUserId:'all'}), results[1], {userId:_uid,targetUserId:'all'}); }
+        if (currentUser && refreshReports && results[6]?.status === 'success' && Array.isArray(results[6].prices)) {
+            try { localStorage.setItem(ownerScopedKey('userProductPrices'), JSON.stringify(results[6].prices)); }
+            catch (storageError) { console.warn('تعذر تحديث كاش الأسعار الشخصية محلياً:', storageError); }
+        }
         window.dispatchEvent(new CustomEvent('dbCacheRefreshed',{detail:freshDB}));
         window.dispatchEvent(new CustomEvent('reportsCacheInvalidated'));
         window.dispatchEvent(new CustomEvent('movementCacheInvalidated'));

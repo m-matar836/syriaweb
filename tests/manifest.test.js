@@ -112,16 +112,10 @@ test('pwa: the cache name is versioned so a deploy actually reaches installed ap
   assert.ok(/-v\d+/.test(name), `CACHE_NAME must carry a version, got ${name}`);
 });
 
-test('pwa: the version is not stale — every shell asset served from cache is revalidated', () => {
-  // The failure this guards against is silent and invisible: publish a fix, the
-  // installed app keeps serving the old file, and nobody sees the change until
-  // they bump CACHE_NAME by hand. Version bumps get forgotten, so the fetch
-  // strategy itself must not depend on one.
-  //
-  // Anything in APP_SHELL is by definition something we ship and change, so it
-  // is served network-first and falls back to the cache only when the network
-  // is gone. Cache-first is reserved for the CDN copies, which are pinned by
-  // SRI and cannot change under us.
+test('pwa: local shell is served from cache immediately and refreshed in background', () => {
+  // A packaged install must not wait on a mobile network for every local script
+  // and stylesheet. New deployments still increment CACHE_NAME and precache the
+  // whole shell, while each open revalidates local assets for later launches.
   const sw = read('service-worker.js');
   const shell = (sw.match(/const APP_SHELL = \[([\s\S]*?)\];/) || [])[1] || '';
   const localAssets = [...shell.matchAll(/'\.\/([^']+)'/g)].map(m => m[1]);
@@ -133,13 +127,13 @@ test('pwa: the version is not stale — every shell asset served from cache is r
   const exts = ['js', 'css', 'html', 'json', 'svg'];
   for (const ext of exts) {
     assert.ok(new RegExp(ext).test(guarded),
-      `isLocalShellUrl must treat .${ext} as network-first, or it silently becomes cache-first`);
+      `isLocalShellUrl must include .${ext}, or its assets will skip background revalidation`);
   }
 
-  // And the branch must actually be the one that reaches the network-first
-  // handler rather than the cache-first tail below it.
-  assert.match(sw, /if \(\s*isLocalShellUrl\(url\)\s*\|\|\s*request\.mode === 'navigate'\s*\)\s*\{\s*return await networkFirstHandler/,
-    'local shell assets must take the network-first branch');
+  assert.match(sw, /if \(\s*isLocalShellUrl\(url\)\s*\|\|\s*request\.mode === 'navigate'\s*\)\s*\{\s*event\.respondWith\(staleWhileRevalidateHandler/,
+    'local shell assets must return cached bytes immediately and refresh in the background');
+  assert.match(sw, /event\.waitUntil\(refresh\.catch\(\(\) => \{\}\)\)/,
+    'background refresh must stay alive after the cached response is returned');
   assert.doesNotMatch(sw, /isLocalScriptUrl/,
     'the old .js-only predicate is what left style.css on cache-first');
 });
@@ -151,24 +145,24 @@ test('pwa: the version is not stale — every shell asset served from cache is r
  * A regex over the source cannot tell whether the reply is actually sent, or
  * sent before the deletion finished — which is the whole defect.
  */
-function loadWorker() {
+function loadWorker(options = {}) {
   const listeners = {};
   const store = new Map();
   const deleted = [];
+  const fetchImpl = options.fetch || (async () => { throw new Error('network disabled in the test'); });
+  const cache = {
+    keys: async () => [...store.keys()].map(u => new sandbox.Request(u)),
+    match: async (request) => store.get(request.url) || undefined,
+    put: async (request, response) => { store.set(request.url, response); },
+    delete: async (request) => { deleted.push(request.url); return store.delete(request.url); },
+  };
   const sandbox = {
     console, URL, Promise, Set, Map, Object, Array, String, Number, Boolean, JSON,
     Request: class Request { constructor(url) { this.url = String(url); } },
     Response: class Response { constructor(body, init) { this.body = body; this.init = init; } },
-    fetch: async () => { throw new Error('network disabled in the test'); },
+    fetch: fetchImpl,
     caches: {
-      open: async () => ({
-        // keys() hands back Request objects, as the real Cache does — the
-        // handler reads req.url, so returning bare strings would hide the path.
-        keys: async () => [...store.keys()].map(u => new sandbox.Request(u)),
-        match: async () => undefined,
-        put: async () => {},
-        delete: async (req) => { deleted.push(req.url); return store.delete(req.url); },
-      }),
+      open: async () => cache,
       keys: async () => [],
       delete: async () => true,
     },
@@ -184,6 +178,37 @@ function loadWorker() {
   new vm.Script(read('service-worker.js'), { filename: 'service-worker.js' }).runInContext(sandbox);
   return { listeners, store, deleted };
 }
+
+test('pwa: a cached app script responds before the slow network refresh completes', async () => {
+  let releaseNetwork;
+  let fetchCount = 0;
+  const pendingFetch = new Promise(resolve => { releaseNetwork = resolve; });
+  const { listeners, store } = loadWorker({ fetch: () => { fetchCount++; return pendingFetch; } });
+  const url = 'https://example.test/core.js';
+  const cached = { version: 'cached' };
+  const fresh = { ok: true, version: 'fresh', clone() { return this; } };
+  store.set(url, cached);
+
+  let responsePromise;
+  let refreshPromise;
+  listeners.fetch({
+    request: { method: 'GET', url, mode: 'cors' },
+    respondWith(promise) { responsePromise = promise; },
+    waitUntil(promise) { refreshPromise = promise; }
+  });
+
+  const response = await Promise.race([
+    responsePromise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('cache response waited on network')), 50))
+  ]);
+  assert.equal(response, cached);
+  assert.equal(fetchCount, 1, 'the shell is still refreshed in the background');
+  assert.ok(refreshPromise, 'the refresh must be kept alive after the response');
+
+  releaseNetwork(fresh);
+  await refreshPromise;
+  assert.equal(store.get(url), fresh, 'the next app opening will use the refreshed asset');
+});
 
 test('pwa: CLEAR_APP_CACHE is acknowledged only after the deletion finished', async () => {
   // refreshAppCache() awaits this reply before issuing any API request. Without

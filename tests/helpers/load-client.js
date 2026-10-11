@@ -97,6 +97,8 @@ class FakeEl {
    * would have in index.html.
    */
   querySelector(selector) {
+    const classSelector = /^\.([\w-]+)$/.exec(String(selector).trim());
+    if (classSelector) return this.querySelectorAll(selector)[0] || null;
     const m = /^([a-zA-Z][\w-]*)?(?:\[([\w-]+)\])?$/.exec(String(selector).trim());
     if (!m) return null;
     const [, tag, attr] = m;
@@ -230,6 +232,7 @@ function loadClient(file, opts = {}) {
       // off them (`$('#campaign').on('change', fn).trigger('change')`).
       on() { return w; },
       off() { return w; },
+      select2() { return w; },
       ready(fn) { if (typeof fn === 'function') fn(); return w; },
       trigger() { return w; },
       click() { return w; },

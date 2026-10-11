@@ -103,6 +103,14 @@ async function openReportsView() {
           els[id] = originalGet(id);
           if (id === 'reportForm') els[id].checkValidity = () => true;
           if (id === 'restoreLastPointBtn') els[id].classList.add('d-none');
+          if (id === 'toast-notification') {
+            const toastMessage = new FakeEl('span', 'toast-message');
+            els[id].querySelector = (selector) => selector === '.toast-message' ? toastMessage : null;
+          }
+          if (['sales-table-body', 'competitor-sales-table-body', 'expenses-table-body'].includes(id)) {
+            const queryClasses = els[id].querySelectorAll.bind(els[id]);
+            els[id].querySelectorAll = (selector) => selector === 'tr' ? els[id].children : queryClasses(selector);
+          }
           // populateSelect() reads the «اختر...» placeholder out of the markup
           // before it rewrites the options, so a bare stub select throws.
           if (PLACEHOLDER_SELECTS.includes(id)) {
@@ -113,11 +121,20 @@ async function openReportsView() {
         el.focus = () => focusCalls.push(id);
         return el;
       };
+      const originalDollar = s.$;
+      s.$ = (target) => typeof target === 'string' && /^#[\w-]+$/.test(target)
+        ? originalDollar(s.document.getElementById(target.slice(1)))
+        : originalDollar(target);
+      s.jQuery = s.$;
       s.document.querySelector = (sel) => {
         const key = 'q:' + sel;
         if (!memo.has(key)) memo.set(key, new FakeEl('div', key));
         return memo.get(key);
       };
+      const originalQueryAll = s.document.querySelectorAll.bind(s.document);
+      s.document.querySelectorAll = (sel) => sel === '#competitor-sales-table-body tr'
+        ? (els['competitor-sales-table-body']?.children || [])
+        : originalQueryAll(sel);
     },
   });
 
@@ -162,6 +179,251 @@ test('last-point restore button is shown on the report screen for every employee
   els.reportForm.dispatch('change');
   assert.ok(!els.restoreLastPointBtn.classList.contains('d-none'),
     'choosing a campaign must not hide the restore action');
+});
+
+test('last-point restore populates every point field and creates an option for a saved market', async () => {
+  const { els, c } = await openReportsView();
+  c.localStorage.setItem('lastReportPoint::boss', JSON.stringify({
+    governorate: 'دمشق', region: 'الشام', market: 'متجر مضاف يدوياً',
+    campaign: 'حملة آخر نقطة', event: 'حدث آخر نقطة', eventDays: '2',
+    coordinator: 'ليلى المنسقة', inventoryDependency: 'أحمد المروج',
+    supervisor: 'المشرف أ', phoneNumber: '70123456', latitude: '33.8938', longitude: '35.5018'
+  }));
+
+  els.restoreLastPointBtn.dispatch('click');
+  // Legacy snapshots may need a quick history lookup before the final fields are applied.
+  await new Promise(resolve => setTimeout(resolve, 10));
+
+  for (const [id, expected] of Object.entries({
+    governorate: 'دمشق', region: 'الشام', market_name: 'متجر مضاف يدوياً',
+    campaign: 'حملة آخر نقطة', event: 'حدث آخر نقطة', eventDays: '2',
+    coordinator: 'ليلى المنسقة', inventoryDependency: 'أحمد المروج',
+    supervisor: 'المشرف أ', phoneNumber: '70123456', latitude: '33.8938', longitude: '35.5018'
+  })) assert.equal(els[id].value, expected, `${id} should be restored`);
+  assert.ok(els.market_name.children.some(option => option.value === 'متجر مضاف يدوياً'),
+    'a saved direct-promotion market must be selectable even if it was never in Locations');
+});
+
+test('last-point restore also restores sales, competitor sales, and expenses', async () => {
+  const { els, c } = await openReportsView();
+  c.localStorage.setItem('lastReportPoint::boss', JSON.stringify({
+    governorate: 'دمشق', region: 'الشام', market: 'البرزة',
+    campaign: 'حملة آخر نقطة', event: 'ترويج مولات', eventDays: '1',
+    coordinator: 'ليلى المنسقة', inventoryDependency: '', supervisor: 'المشرف أ',
+    phoneNumber: '', latitude: '', longitude: '',
+    transactionDataVersion: 2,
+    sales: [{ product: 'منتج محفوظ غير موجود بالقائمة', price: 12.5, quantity: 3 }],
+    salesOfCompetitor: [{ product: 'منافس محفوظ غير موجود بالقائمة', price: 8, quantity: 2 }],
+    expenses: [{ item: 'مصاريف محفوظة', quantity: 4 }]
+  }));
+
+  els.restoreLastPointBtn.dispatch('click');
+
+  const saleRows = els['sales-table-body'].children;
+  const competitorRows = els['competitor-sales-table-body'].children;
+  const expenseRows = els['expenses-table-body'].children;
+  assert.equal(saleRows.length, 1, 'the saved sales row should be restored');
+  assert.equal(saleRows[0].querySelector('.sale-product').value, 'منتج محفوظ غير موجود بالقائمة');
+  assert.equal(saleRows[0].querySelector('.sale-price').value, '12.50');
+  assert.equal(Number(saleRows[0].querySelector('.sale-quantity').value), 3);
+  assert.equal(competitorRows.length, 1, 'the saved competitor row should be restored');
+  assert.equal(competitorRows[0].querySelector('.competitor-product').value, 'منافس محفوظ غير موجود بالقائمة');
+  assert.equal(competitorRows[0].querySelector('.competitor-price').value, '8.00');
+  assert.equal(competitorRows[0].querySelector('.competitor-quantity').value, '2');
+  assert.equal(expenseRows.length, 1, 'the saved expense row should be restored');
+  assert.equal(expenseRows[0].querySelector('.expense-item').value, 'مصاريف محفوظة');
+  assert.equal(Number(expenseRows[0].querySelector('.expense-quantity').value), 4);
+});
+
+test('restore waits for migration when a legacy point has empty transaction arrays', async () => {
+  const { els, c } = await openReportsView();
+  c.localStorage.setItem('lastReportPoint::boss', JSON.stringify({
+    governorate: 'طرابلس', region: 'المدينة', market: 'نقطة قديمة',
+    campaign: 'حملة قديمة', event: 'ترويج مولات', savedAt: 100,
+    // بعض النسخ القديمة أنشأت المصفوفات فارغة، رغم وجود معاملات في التقرير الأصلي.
+    sales: [], salesOfCompetitor: [], expenses: []
+  }));
+  c.sandbox.apiGet = async (action, params) => {
+    assert.equal(action, 'getReportsPage');
+    assert.equal(params.targetUserId, 'E9');
+    return {
+      status: 'success',
+      items: [{
+        id: 49, createdById: 'E9', governorate: 'دمشق', region: 'الشام', market: 'البرزة',
+        campaign: 'حملة محفوظة', event: 'ترويج مولات', eventDays: 1,
+        sales: [{ product: 'قهوة محفوظة', price: 12.5, quantity: 3 }],
+        salesOfCompetitor: [{ product: 'منافس محفوظ', price: 8, quantity: 2 }],
+        expenses: [{ item: 'تذوق محفوظ', quantity: 4 }]
+      }]
+    };
+  };
+
+  // اضغط فور فتح الصفحة: لا نعتمد على أن مؤقت التهيئة بدأ أولاً.
+  els.restoreLastPointBtn.dispatch('click');
+  await new Promise(resolve => setTimeout(resolve, 30));
+
+  assert.equal(els.market_name.value, 'البرزة', 'restoration should use the migrated saved point');
+  assert.equal(els['sales-table-body'].children.length, 1);
+  assert.equal(els['sales-table-body'].children[0].querySelector('.sale-product').value, 'قهوة محفوظة');
+  assert.equal(els['sales-table-body'].children[0].querySelector('.sale-price').value, '12.50');
+  assert.equal(els['competitor-sales-table-body'].children.length, 1);
+  assert.equal(els['competitor-sales-table-body'].children[0].querySelector('.competitor-product').value, 'منافس محفوظ');
+  assert.equal(els['expenses-table-body'].children.length, 1);
+  assert.equal(els['expenses-table-body'].children[0].querySelector('.expense-item').value, 'تذوق محفوظ');
+
+  const migrated = JSON.parse(c.localStorage.getItem('lastReportPoint::boss'));
+  assert.equal(migrated.transactionDataVersion, 2, 'the migrated snapshot should be marked complete');
+});
+
+test('a context-only saved point is upgraded from this employee’s newest full report', async () => {
+  const { c } = await openReportsView();
+  c.localStorage.setItem('lastReportPoint::boss', JSON.stringify({
+    governorate: 'طرابلس', region: 'المدينة', market: 'نقطة قديمة',
+    campaign: 'حملة قديمة', event: 'حدث قديم', savedAt: 100
+  }));
+  c.sandbox.apiGet = async (action, params) => {
+    assert.equal(action, 'getReportsPage');
+    assert.equal(params.targetUserId, 'E9', 'the seed request must be scoped to the logged-in employee');
+    assert.equal(params.pageSize, '1', 'only the latest report is needed');
+    return {
+      status: 'success',
+      items: [{
+        id: 48, createdById: 'E9', governorate: 'دمشق', region: 'الشام', market: 'البرزة',
+        campaign: 'حملة قديمة', event: 'ترويج مباشر', eventDays: 1,
+        coordinator: 'ليلى المنسقة', supervisor: 'المشرف أ', phoneNumber: '70123456',
+        latitude: '33.89', longitude: '35.50',
+        sales: [{ product: 'مبيعات', price: 2, quantity: 3 }],
+        salesOfCompetitor: [{ product: 'منافس', price: 4, quantity: 1 }],
+        expenses: [{ item: 'ضيافة', quantity: 5 }]
+      }]
+    };
+  };
+
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  const saved = JSON.parse(c.localStorage.getItem('lastReportPoint::boss'));
+  assert.equal(saved.market, 'البرزة');
+  assert.equal(saved.campaign, 'حملة قديمة');
+  assert.equal(saved.phoneNumber, '70123456');
+  assert.equal(saved.latitude, '33.89');
+  assert.equal(saved.sales.length, 1);
+  assert.equal(saved.salesOfCompetitor.length, 1);
+  assert.equal(saved.expenses.length, 1);
+});
+
+test('last-point migration prefers newer offline data from this employee, never another account', async () => {
+  const { c } = await openReportsView();
+  c.localStorage.setItem('lastReportPoint::boss', JSON.stringify({
+    governorate: 'دمشق', region: 'الشام', market: 'نقطة قديمة', savedAt: 100
+  }));
+  const queued = {
+    id: 99, createdById: 'E9', governorate: 'بيروت', region: 'الحمرا', market: 'نقطة غير مرسلة',
+    campaign: 'حملة محلية', event: 'ترويج مولات',
+    sales: [{ product: 'مبيع غير مرسل', price: 3, quantity: 4 }],
+    salesOfCompetitor: [{ product: 'منافس غير مرسل', price: 5, quantity: 2 }],
+    expenses: [{ item: 'مصروف غير مرسل', quantity: 6 }]
+  };
+  c.sandbox.getPendingReports = async () => [
+    { createdAt: 900, reportData: { ...queued, createdById: 'OTHER' } },
+    { createdAt: 800, reportData: queued }
+  ];
+  c.sandbox.apiGet = async () => { throw new Error('a newer local report should avoid the network'); };
+
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  const saved = JSON.parse(c.localStorage.getItem('lastReportPoint::boss'));
+  assert.equal(saved.market, 'نقطة غير مرسلة');
+  assert.deepEqual(saved.sales, queued.sales);
+  assert.deepEqual(saved.salesOfCompetitor, queued.salesOfCompetitor);
+  assert.deepEqual(saved.expenses, queued.expenses);
+});
+
+test('last-point restore asks before replacing unsent transaction rows', async () => {
+  const { els, c } = await openReportsView();
+  els.campaign.value = 'حملة قائمة';
+  els.event.value = 'حدث قائم';
+  const fields = {
+    '.sale-product': { value: 'قهوة' },
+    '.sale-price': { value: '5' },
+    '.sale-quantity': { value: '2' },
+    '.row-total': { value: '10' }
+  };
+  const row = { querySelector: (selector) => fields[selector] || null };
+  els['sales-table-body'].querySelectorAll = (selector) => selector === 'tr' ? [row] : [];
+  c.localStorage.setItem('lastReportPoint::boss', JSON.stringify({
+    governorate: 'دمشق', region: 'الشام', market: 'البرزة',
+    campaign: 'حملة مختلفة', event: 'حدث مختلف', eventDays: '1',
+    coordinator: 'ليلى المنسقة', inventoryDependency: '', supervisor: 'المشرف أ',
+    phoneNumber: '', latitude: '', longitude: '', transactionDataVersion: 2,
+    sales: [{ product: 'محفوظة', price: 7, quantity: 1 }],
+    salesOfCompetitor: [], expenses: []
+  }));
+  c.sandbox.confirm = () => false;
+
+  els.restoreLastPointBtn.dispatch('click');
+
+  assert.equal(els.governorate.value, '', 'cancel must leave the entire current form unchanged');
+  assert.equal(els.campaign.value, 'حملة قائمة', 'campaign must not change while a sale is pending');
+  assert.equal(els.event.value, 'حدث قائم', 'event must not change while a sale is pending');
+  assert.equal(els['sales-table-body'].querySelectorAll('tr').length, 1, 'unsent sale row must remain intact');
+});
+
+test('unsent report draft remains on-device until its IndexedDB write completes', async () => {
+  const { els, c } = await openReportsView();
+  els.market_name.value = 'البرزة';
+  els.reportForm.dispatch('input');
+  const draftKey = 'reportFormState::boss';
+  assert.ok(c.localStorage.getItem(draftKey), 'typing must save a local draft immediately');
+
+  let finishLocalWrite;
+  let queuedReport;
+  c.sandbox.queueReportOffline = (reportData) => {
+    queuedReport = reportData;
+    return new Promise(resolve => { finishLocalWrite = resolve; });
+  };
+  pickPromoters(els, ['أحمد المروج']);
+  els.reportForm.dispatch('submit', { preventDefault() {}, stopPropagation() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  assert.equal(typeof finishLocalWrite, 'function', 'submission should be waiting for the local durable write');
+  assert.ok(c.localStorage.getItem(draftKey), 'the draft must not be deleted before IndexedDB commits');
+
+  finishLocalWrite('pending-report-test');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(queuedReport.market, 'البرزة',
+    'the report payload written to the durable queue must contain the user’s unsent data');
+});
+
+test('the saved last-point snapshot includes all three transaction tables after submit', async () => {
+  const { els, c } = await openReportsView();
+  els.governorate.value = 'دمشق';
+  els.region.value = 'الشام';
+  els.market_name.value = 'البرزة';
+  els.campaign.value = 'حملة محفوظة';
+  els.event.value = 'ترويج مولات';
+
+  const row = fields => ({ querySelector: selector => fields[selector] || null });
+  els['sales-table-body'].appendChild(row({
+    '.sale-product': { value: 'منتج' }, '.sale-price': { value: '2.5' },
+    '.sale-quantity': { value: '3' }, '.row-total': { value: '7.5' }
+  }));
+  els['competitor-sales-table-body'].appendChild(row({
+    '.competitor-product': { value: 'منافس' }, '.competitor-price': { value: '4' },
+    '.competitor-quantity': { value: '2' }
+  }));
+  els['expenses-table-body'].appendChild(row({
+    '.expense-item': { value: 'تذوق' }, '.expense-quantity': { value: '5' }
+  }));
+  els.reportForm.dispatch('input');
+  pickPromoters(els, ['أحمد المروج']);
+  els.reportForm.dispatch('submit', { preventDefault() {}, stopPropagation() {} });
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  const saved = JSON.parse(c.localStorage.getItem('lastReportPoint::boss'));
+  assert.equal(saved.transactionDataVersion, 2);
+  assert.deepEqual(saved.sales, [{ product: 'منتج', price: 2.5, quantity: 3, campaign: 'حملة محفوظة' }]);
+  assert.deepEqual(saved.salesOfCompetitor, [{ product: 'منافس', price: 4, quantity: 2 }]);
+  assert.deepEqual(saved.expenses, [{ item: 'تذوق', quantity: '5' }]);
 });
 
 test('promoters are required: picking at least one person lets the submit through', async () => {

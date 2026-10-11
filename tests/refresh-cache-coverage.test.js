@@ -7,11 +7,11 @@
 // recording every endpoint it requests, rather than trusting the
 // function's name or the «تم تحديث كل البيانات» label it flashes.
 //
-// The answer is: PART. The button requests six endpoints. Everything
+// The answer is: PART. The button requests seven endpoints. Everything
 // else the app can read is left untouched, so it can only stay
 // correct if the screen holding it refetches when the refresh ends.
 // refreshAppCache() fires `appDataRefreshed` for exactly that reason,
-// and the dashboard/history/attendance/movement screens use it.
+// and the dashboard/history/attendance/movement/report screens use it.
 //
 // The gaps this suite exists to catch are the screens that read a
 // non-refreshed endpoint and do NOT listen for that event: they keep
@@ -103,7 +103,7 @@ function staleScreens(refreshed) {
 
 // ------------------------------------------------------------------ the answer
 
-test('the refresh button requests six endpoints, and no more', async () => {
+test('the refresh button requests seven endpoints, and no more', async () => {
   // Pinned deliberately. This is the documented boundary of what
   // «تحديث البيانات» covers; anything added or removed here is a change
   // to what the user is told the button did, so it must be a visible edit.
@@ -111,7 +111,7 @@ test('the refresh button requests six endpoints, and no more', async () => {
 
   assert.deepEqual([...new Set(actions)].sort(),
     ['getAttendance', 'getInitialData', 'getReports', 'getStatusOptions',
-      'getTeamOptions', 'getUserFestivalMovements'],
+      'getTeamOptions', 'getUserFestivalMovements', 'getUserProductPrices'],
     'the set of endpoints «تحديث البيانات» requests changed');
 });
 
@@ -151,13 +151,10 @@ test('every screen left holding unrefreshed data refetches on appDataRefreshed',
 });
 
 test('a screen that keeps its own client-side cache may still need to refetch', async () => {
-  // Why attendance/history/movement are not redundant for listening, even
-  // though every endpoint they read is one the button already requested:
-  // the button only writes the master DB and the reports memory cache. It
-  // does NOT touch the per-screen localStorage keys, so those screens have
-  // to refetch to rewrite their own copy. Pinned here because "these
-  // listeners are redundant, drop them" is the tempting wrong fix for the
-  // failure above.
+  // Pages with their own local caches must still listen for refresh even if
+  // the button requested the endpoints: the event refreshes their in-memory
+  // selectors and scoped browser cache. This now includes page-reports because
+  // personal prices must be refreshed without reloading the form.
   const refreshed = new Set(await endpointsRefreshedByButton());
   const fullyRefreshedButListening = pageFiles()
     .filter(listensForRefreshEvent)
@@ -165,8 +162,8 @@ test('a screen that keeps its own client-side cache may still need to refetch', 
     .filter(f => [...readEndpoints(f)].every(a => refreshed.has(a) || DERIVED_FROM_DB.has(a) || SELF_REFETCH.has(a)));
 
   assert.deepEqual(fullyRefreshedButListening.sort(), [
-    'page-attendance.js', 'page-history.js', 'page-movement.js',
-  ], 'the set of screens that refetch purely to rewrite their own cache changed');
+    'page-attendance.js', 'page-history.js', 'page-movement.js', 'page-reports.js',
+  ], 'the set of screens that refresh their own cached state changed');
 });
 
 // ------------------------------------------------------- the silent variant

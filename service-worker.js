@@ -9,7 +9,12 @@
 // v74: تسريع المصادقة وتحسين Mobile/Tablet responsive layout.
 // v75: history pagination + browser API cache for report pages.
 // v76: show per-user last-point restore and write reports to IndexedDB before sending.
-const CACHE_NAME = 'festival-app-v76-offline-report-retention';
+// v77: serve the cached app shell immediately and refresh local assets in the background.
+// v78: restore transaction tables with the saved last point.
+// v79: wait for migration of legacy last-point snapshots before restoring transaction tables.
+// v80: isolate sales-price overrides by authenticated user; never mutate shared Products prices from reports.
+// v81: direct-sale events use Products, other events use personal prices; personal prices load off the render-critical path.
+const CACHE_NAME = 'festival-app-v81-event-price-source-fast';
 const APP_SHELL = [
   './index.html',
   './style.css','./core.js','./page-login.js','./page-reports.js','./page-expenses.js','./page-history.js','./page-dashboard.js','./page-movement.js','./page-attendance.js','./page-users.js','./page-salary.js','./manifest.json','./icons/icon.svg',
@@ -22,6 +27,8 @@ const APP_SHELL = [
   'https://cdn.jsdelivr.net/npm/select2-bootstrap-5-theme@1.3.0/dist/select2-bootstrap-5-theme.rtl.min.css',
   'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js'
 ];
+// Do not add getUserProductPrices here: its response is user-specific and must
+// never enter a Service Worker cache whose key intentionally strips the session token.
 const CACHEABLE_API_ACTIONS = new Set([
   'getInitialData','getReports','getReportsPage','getReportById','findProductByBarcode','getCompetitorProducts',
   'getUserFestivalMovements','getTeamOptions','getAttendance','getStatusOptions',
@@ -102,28 +109,29 @@ self.addEventListener('message', event => {
   })());
 });
 
-// V49: الشبكة أولاً للسكربتات المحلية والتنقل (أي صياغة تُعدَّل تظهر فوراً ولو بعد أول
-// تحديث)، أما أصول CDN الثابتة فتبقى cache-first لأنها محمية بـ SRI ولا تتغير.
-// V71: التوسّع ليشمل كل أصول القشرة نفس-الأصل لا السكربتات فقط. `style.css` كان
-// cache-first، فأي إصلاح في التنسيق (مثل 100dvh) لا يصل إلا بعد تحميل إضافي —
-// وهذا بالضبط سبب وصول إصلاح دون أن يلمسه أحد. نفس-الأصل لا SRI ولا كاش
-// طويل الأمد، فتكلفة الشبكة عليه أقل من كلفة إظهار واجهة قديمة.
+// أصول التطبيق المحلية: اعرض النسخة المخزّنة فوراً وحدّثها بالخلفية، حتى لا ينتظر
+// تشغيل التطبيق المثبّت الشبكة على كل ملف. إصدار الكاش الجديد يجلب كامل القشرة
+// عند التحديث/النشر، لذلك لا يعتمد وصول النسخة الجديدة على انتظار الشبكة في كل فتح.
 const SW_ORIGIN = self.location.origin;
 function isLocalShellUrl(url) {
   if (url.origin !== SW_ORIGIN) return false;
   return /\.(?:js|css|html|json|svg|webmanifest)$/i.test(url.pathname);
 }
-async function networkFirstHandler(event, request, cache) {
-  const cached = await cache.match(request);
-  try {
-    const fresh = await fetch(request);
-    if (fresh && fresh.ok) await cache.put(request, fresh.clone());
-    return fresh;
-  } catch (e) {
+function staleWhileRevalidateHandler(event, request, cachePromise) {
+  const refresh = Promise.resolve(cachePromise).then(cache => cacheNetworkResponse(cache, request));
+  // Register synchronously while the fetch event is active; the page response
+  // can then return the cache without cancelling the update request.
+  event.waitUntil(refresh.catch(() => {}));
+  return Promise.resolve(cachePromise).then(async cache => {
+    const cached = await cache.match(request);
+    // Open immediately from the installed shell; network freshness must not
+    // block the first screen on a slow mobile connection.
     if (cached) return cached;
+    const fresh = await refresh;
+    if (fresh) return fresh;
     if (request.mode === 'navigate') return (await cache.match('./index.html')) || new Response('', { status: 503 });
     return new Response('', { status: 503 });
-  }
+  });
 }
 self.addEventListener('fetch', event => {
   const request=event.request;
@@ -165,12 +173,14 @@ self.addEventListener('fetch', event => {
     })());
     return;
   }
-  // Static resources: network-first for local scripts/navigations, cache-first for the rest.
+  // Static resources: stale-while-revalidate for local shell/navigation, cache-first for CDN.
+  const cachePromise = caches.open(CACHE_NAME);
+  if (isLocalShellUrl(url) || request.mode === 'navigate') {
+    event.respondWith(staleWhileRevalidateHandler(event, request, cachePromise));
+    return;
+  }
   event.respondWith((async()=>{
-    const cache=await caches.open(CACHE_NAME);
-    if (isLocalShellUrl(url) || request.mode === 'navigate') {
-      return await networkFirstHandler(event, request, cache);
-    }
+    const cache=await cachePromise;
     const cached=await cache.match(request);
     const refresh=cacheNetworkResponse(cache,request);
     if(cached){ event.waitUntil(refresh.catch(()=>{})); return cached; }

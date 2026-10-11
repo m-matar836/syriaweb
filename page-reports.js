@@ -42,6 +42,18 @@ async function addLocationToSheet(type, value, governorate = '', region = '') {
     return result;
 }
 
+// Price-source rule for report sales: direct-promotion-and-sale events always
+// use the shared Products price; all other event types use this account's
+// personal price, falling back to Products only until a personal price exists.
+function resolveReportSalePrice(eventValue, productPrice, personalPrice) {
+    const masterCandidate = Number(productPrice);
+    const masterPrice = Number.isFinite(masterCandidate) && masterCandidate >= 0 ? masterCandidate : 0;
+    if (String(eventValue ?? '').trim() === 'ترويج وبيع مباشر') return masterPrice;
+    if (personalPrice === undefined || personalPrice === null || personalPrice === '') return masterPrice;
+    const personalCandidate = Number(personalPrice);
+    return Number.isFinite(personalCandidate) && personalCandidate >= 0 ? personalCandidate : masterPrice;
+}
+
 function setupLocationAddButtons(DBRef) {
     const modalEl = document.getElementById('addLocationModal');
     const form = document.getElementById('addLocationForm');
@@ -127,7 +139,39 @@ function setupLocationAddButtons(DBRef) {
 async function handleReportPage() {
     let isFormDirty = false;
     let stateRestoring = false;
-    
+
+    // أسعار المستخدم محفوظة منفصلة عن Products المشتركة. نقرأ كاش صاحب الحساب
+    // فوراً ثم نحدّثه من الخادم بالتوازي مع تحميل بيانات الصفحة الأساسية.
+    const userProductPriceCacheKey = () => ownerScopedKey('userProductPrices');
+    const userProductPriceScopeKey = (campaign, product) =>
+        `${String(campaign ?? '').trim().toLocaleLowerCase()}\u0000${String(product ?? '').trim().toLocaleLowerCase()}`;
+    let userProductPricesByKey = new Map();
+    const replaceUserProductPrices = (entries) => {
+        const next = new Map();
+        (Array.isArray(entries) ? entries : []).forEach(entry => {
+            const campaign = String(entry?.campaign ?? '').trim();
+            const product = String(entry?.product ?? '').trim();
+            const price = Number(entry?.price);
+            if (!campaign || !product || !Number.isFinite(price) || price < 0) return;
+            next.set(userProductPriceScopeKey(campaign, product), { campaign, product, barcode: String(entry?.barcode ?? '').trim(), price });
+        });
+        userProductPricesByKey = next;
+    };
+    const saveUserProductPricesCache = () => {
+        try { localStorage.setItem(userProductPriceCacheKey(), JSON.stringify(Array.from(userProductPricesByKey.values()))); }
+        catch (e) { console.warn('تعذر حفظ كاش أسعار المستخدم محلياً:', e); }
+    };
+    try {
+        const cachedUserPrices = JSON.parse(localStorage.getItem(userProductPriceCacheKey()) || '[]');
+        replaceUserProductPrices(cachedUserPrices);
+    } catch (e) {}
+    const userProductPricesRequest = navigator.onLine
+        ? apiGet('getUserProductPrices', { v: 'user-prices-v1' }).catch(error => {
+            console.warn('تعذر تحميل الأسعار الشخصية من الخادم؛ سيُستخدم الكاش إن وجد:', error);
+            return null;
+        })
+        : Promise.resolve(null);
+
     const mainContainer = document.querySelector('.main-container');
     const form = document.getElementById('reportForm');
     form.style.display = 'none';
@@ -138,6 +182,8 @@ async function handleReportPage() {
         mainContainer.innerHTML = `<div class="alert alert-danger">فشل تحميل البيانات الأساسية. يرجى <a href="#" onclick="${logoutOnClick}">تسجيل الخروج</a> والمحاولة مرة أخرى.</div>`;
         return;
     }
+    // لا ننتظر الشبكة هنا: تُعرض الصفحة مباشرةً من كاش المتصفح/Products،
+    // ثم تُطبّق الأسعار الشخصية في الخلفية فور وصولها.
     // إصلاح ذاتي: كاش قديم من نسخة ما قبل دمج الموظفين → نجلب البيانات في الخلفية
     // حتى تظهر أسماء "الأشخاص المتواجدين ضمن النقطة" دون انتظار الشاشة.
     if (!Array.isArray(DB.employees) && navigator.onLine) {
@@ -243,6 +289,25 @@ async function handleReportPage() {
         // يظهر لكل موظف؛ بيانات النقطة نفسها تبقى منفصلة لكل حساب.
         restoreLastPointBtn.classList.remove('d-none');
     };
+    let lastPointSeedInProgress = false;
+    let lastPointSeedPromise = null;
+    // النسخ القديمة قد تحتوي المصفوفات الثلاث لكن من دون إصدار يثبت أن حفظ
+    // المعاملات اكتمل؛ إذا كانت المصفوفات كلها فارغة نرقّيها من أحدث تقرير محفوظ.
+    // أما أي نقطة حديثة (v2) فيُعتد حتى بالمصفوفات الفارغة لأنها قد تكون فارغة فعلاً.
+    const hasCompleteTransactionSnapshot = point => {
+        const hasArrays = Array.isArray(point?.sales) &&
+            Array.isArray(point?.salesOfCompetitor) && Array.isArray(point?.expenses);
+        if (!hasArrays) return false;
+        if (Number(point.transactionDataVersion) >= 2) return true;
+        return point.sales.length > 0 || point.salesOfCompetitor.length > 0 || point.expenses.length > 0;
+    };
+    const startLastPointSeed = () => {
+        if (!lastPointSeedInProgress) {
+            lastPointSeedInProgress = true;
+            lastPointSeedPromise = seedLastPointFromHistory();
+        }
+        return lastPointSeedPromise;
+    };
     const saveLastPoint = (reportData) => {
         const source = reportData || {
             governorate: $('#governorate').val(),
@@ -272,56 +337,217 @@ async function handleReportPage() {
             latitude: source.latitude || '',
             longitude: source.longitude || ''
         };
+        const transactionFields = ['sales', 'salesOfCompetitor', 'expenses'];
+        const hasCompleteTransactions = transactionFields.every(field => Array.isArray(source[field]));
+        const copyRows = (rows, fields) => rows.map(row => {
+            const copy = {};
+            fields.forEach(field => {
+                if (row && Object.prototype.hasOwnProperty.call(row, field)) copy[field] = row[field];
+            });
+            return copy;
+        });
         if (!point.governorate || !point.market) return;
-        localStorage.setItem(lastPointKey(), JSON.stringify({
-            ...point,
-            savedAt: Date.now()
-        }));
-        refreshRestoreBtn();
+        try {
+            localStorage.setItem(lastPointKey(), JSON.stringify({
+                ...point,
+                ...(hasCompleteTransactions ? {
+                    transactionDataVersion: 2,
+                    sales: copyRows(source.sales, ['product', 'price', 'quantity', 'campaign']),
+                    salesOfCompetitor: copyRows(source.salesOfCompetitor, ['product', 'price', 'quantity']),
+                    expenses: copyRows(source.expenses, ['item', 'quantity'])
+                } : {}),
+                savedAt: Date.now()
+            }));
+            refreshRestoreBtn();
+        } catch (error) {
+            console.warn('تعذر حفظ بيانات آخر نقطة محلياً:', error);
+        }
     };
-    const applyLastPoint = () => {
+    const applyLastPoint = async () => {
         let last;
         try { last = JSON.parse(localStorage.getItem(lastPointKey()) || ''); } catch (e) { return; }
+        // لا نعرض نقطة قديمة ذات موقع فقط بينما عملية ترقية بيانات المعاملات
+        // لم تكتمل؛ انتظر جلب آخر تقرير ثم أعد قراءة النسخة المحفوظة.
+        if (!hasCompleteTransactionSnapshot(last)) {
+            const seedPromise = startLastPointSeed();
+            if (seedPromise) {
+                showToast('جارٍ تحميل المبيعات ومبيعات المنافس والمصاريف لآخر نقطة...');
+                await seedPromise;
+                try { last = JSON.parse(localStorage.getItem(lastPointKey()) || ''); } catch (e) { return; }
+            }
+        }
         if (!last) {
             showToast('لا توجد نقطة محفوظة لهذا الحساب بعد.', true);
             return;
         }
         const currentForm = getFormState();
+        const hasTransactionSnapshot = hasCompleteTransactionSnapshot(last);
+        const savedTransactions = hasTransactionSnapshot ? {
+            sales: last.sales,
+            salesOfCompetitor: last.salesOfCompetitor,
+            expenses: last.expenses
+        } : null;
+        const currentTransactions = {
+            sales: currentForm.sales || [],
+            salesOfCompetitor: currentForm.salesOfCompetitor || [],
+            expenses: currentForm.expenses || []
+        };
         const hasUnsavedTransactions = [
-            ...(currentForm.sales || []),
-            ...(currentForm.salesOfCompetitor || []),
-            ...(currentForm.expenses || [])
+            ...currentTransactions.sales,
+            ...currentTransactions.salesOfCompetitor,
+            ...currentTransactions.expenses
         ].some(item =>
             String(item.product || item.item || '').trim() ||
             Number(item.quantity || 0) > 0 ||
             Number(item.price || 0) > 0
         );
-        if (hasUnsavedTransactions) {
-            showToast('أرسل التقرير الحالي أولاً؛ استعادة النقطة لا تستبدل المبيعات أو المصاريف غير المحفوظة.', true);
-            return;
-        }
+        const changesTransactionContext = hasUnsavedTransactions && (
+            (Object.prototype.hasOwnProperty.call(last, 'campaign') &&
+                String(last.campaign || '') !== String(currentForm.campaign || '')) ||
+            (Object.prototype.hasOwnProperty.call(last, 'event') &&
+                String(last.event || '') !== String(currentForm.event || ''))
+        );
+        const transactionSignature = transactions => JSON.stringify({
+            sales: (transactions.sales || []).map(row => [
+                String(row?.product || ''), Number(row?.price || 0), Number(row?.quantity || 0)
+            ]),
+            salesOfCompetitor: (transactions.salesOfCompetitor || []).map(row => [
+                String(row?.product || ''), Number(row?.price || 0), Number(row?.quantity || 0)
+            ]),
+            expenses: (transactions.expenses || []).map(row => [
+                String(row?.item || ''), Number(row?.quantity || 0)
+            ])
+        });
+        const transactionDataDiffers = hasTransactionSnapshot &&
+            transactionSignature(currentTransactions) !== transactionSignature(savedTransactions);
+        const shouldConfirmTransactionReplacement = hasUnsavedTransactions &&
+            hasTransactionSnapshot && (transactionDataDiffers || changesTransactionContext);
+        if (shouldConfirmTransactionReplacement && !confirm(
+            'ستستعيد المبيعات ومبيعات المنافس والمصاريف المحفوظة مع هذه النقطة، وسيتم استبدال الأسطر الموجودة حالياً. هل تريد المتابعة؟'
+        )) return;
+        // إذا كانت نسخة النقطة قديمة ولا تتضمن جداول المعاملات، نحافظ على
+        // سياق معاملات النموذج الحالي بدلاً من مسحها عند تبديل الحملة/الحدث.
+        const preserveLegacyTransactionContext = hasUnsavedTransactions && !hasTransactionSnapshot;
+        const setPointSelect = (id, value) => {
+            if (value === undefined || value === null) return;
+            const select = document.getElementById(id);
+            if (!select) return;
+            const nextValue = String(value);
+            if (String($(select).val() ?? '') === nextValue) return;
+            if (nextValue && select.options && !Array.from(select.options).some(option => String(option.value) === nextValue)) {
+                const option = document.createElement('option');
+                option.value = nextValue;
+                option.textContent = nextValue;
+                select.appendChild(option);
+            } else if (nextValue && !select.options) {
+                const option = document.createElement('option');
+                option.value = nextValue;
+                option.textContent = nextValue;
+                select.appendChild(option);
+            }
+            $(select).val(nextValue || null).trigger('change');
+        };
         stateRestoring = true;
-        if (last.governorate) $('#governorate').val(last.governorate).trigger('change');
-        if (last.region) $('#region').val(last.region).trigger('change');
-        if (last.market) $('#market_name').val(last.market).trigger('change');
-        if (last.campaign) $('#campaign').val(last.campaign).trigger('change');
-        if (last.event) $('#event').val(last.event).trigger('change');
+        setPointSelect('governorate', last.governorate);
+        setPointSelect('region', last.region);
+        setPointSelect('campaign', preserveLegacyTransactionContext ? currentForm.campaign : last.campaign);
+        setPointSelect('event', preserveLegacyTransactionContext ? currentForm.event : last.event);
+        setPointSelect('market_name', last.market);
         if (last.eventDays) document.getElementById('eventDays').value = last.eventDays;
-        if (last.coordinator) $('#coordinator').val(last.coordinator).trigger('change');
-        if (last.inventoryDependency) $('#inventoryDependency').val(last.inventoryDependency).trigger('change');
-        if (last.supervisor) supervisorInput.value = last.supervisor;
-        if (document.getElementById('phoneNumber')) document.getElementById('phoneNumber').value = last.phoneNumber || '';
-        applyGpsToFields(last.latitude, last.longitude);
+        setPointSelect('coordinator', last.coordinator);
+        setPointSelect('inventoryDependency', last.inventoryDependency);
+        if (Object.prototype.hasOwnProperty.call(last, 'supervisor')) supervisorInput.value = last.supervisor || '';
+        if (document.getElementById('phoneNumber') && Object.prototype.hasOwnProperty.call(last, 'phoneNumber')) {
+            document.getElementById('phoneNumber').value = last.phoneNumber || '';
+        }
+        if (Object.prototype.hasOwnProperty.call(last, 'latitude') || Object.prototype.hasOwnProperty.call(last, 'longitude')) {
+            applyGpsToFields(last.latitude, last.longitude);
+        }
         const dateEl = document.getElementById('date');
         if (dateEl && !dateEl.value) dateEl.value = new Date().toISOString().slice(0, 10);
         updateSalesVisibility();
+        if (typeof updateCompetitorSalesVisibility === 'function') updateCompetitorSalesVisibility();
+        if (hasTransactionSnapshot) {
+            salesTableBody.innerHTML = '';
+            if (competitorSalesTableBody) competitorSalesTableBody.innerHTML = '';
+            expensesTableBody.innerHTML = '';
+            (last.sales || []).forEach(createSaleRow);
+            (last.salesOfCompetitor || []).forEach(createCompetitorSaleRow);
+            (last.expenses || []).forEach(createExpenseRow);
+            updateSaleTotals();
+            updateCompetitorSaleTotals();
+            if (last.sales?.length && salesCard) salesCard.style.display = '';
+            if (last.salesOfCompetitor?.length && competitorSalesCard) competitorSalesCard.style.display = '';
+        }
         stateRestoring = false;
         isFormDirty = true;
         saveFormState();
         refreshRestoreBtn();
-        showToast('تمت استعادة آخر نقطة.');
+        showToast(preserveLegacyTransactionContext
+            ? 'تمت استعادة موقع النقطة، وأبقينا المعاملات الحالية لأن النسخة المحفوظة لا تتضمن تفاصيلها.'
+            : hasTransactionSnapshot
+                ? 'تمت استعادة النقطة مع المبيعات ومبيعات المنافس والمصاريف.'
+                : 'تمت استعادة بيانات موقع النقطة، لكن لم تتوفر نسخة محفوظة من المعاملات؛ تحقق من الاتصال وأعد المحاولة.');
     };
     restoreLastPointBtn?.addEventListener('click', applyLastPoint);
+    const seedLastPointFromHistory = async () => {
+        const readSavedPoint = () => {
+            try { return JSON.parse(localStorage.getItem(lastPointKey()) || ''); } catch (e) { return null; }
+        };
+        if (hasCompleteTransactionSnapshot(readSavedPoint())) return;
+        const user = typeof getStoredUser === 'function' ? getStoredUser() : null;
+        if (!user || !user.id) return;
+        try {
+            let latest = null;
+            // If this account has a newer unsent report in IndexedDB, migrate from
+            // that complete local copy first so offline submissions are included.
+            if (typeof getPendingReports === 'function') {
+                try {
+                    const existingPoint = readSavedPoint();
+                    const savedAt = Number(existingPoint?.savedAt || 0);
+                    const pending = await getPendingReports();
+                    latest = (Array.isArray(pending) ? pending : [])
+                        .filter(item => item?.reportData &&
+                            String(item.reportData.createdById || '') === String(user.id) &&
+                            Number(item.createdAt || 0) >= savedAt)
+                        .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))[0]?.reportData || null;
+                } catch (storageError) {
+                    console.warn('تعذر فحص تقارير هذا الحساب المحفوظة للمزامنة:', storageError);
+                }
+            }
+            const params = {
+                userId: String(user.id),
+                role: String(user.role || ''),
+                userName: String(user.name || ''),
+                targetUserId: String(user.id),
+                page: '1',
+                pageSize: '1'
+            };
+            if (!latest) {
+                const result = await apiGet('getReportsPage', params);
+                if (!result || result.status !== 'success' || !Array.isArray(result.items) || !result.items.length) return;
+                latest = result.items.find(report =>
+                    !report.createdById || String(report.createdById) === String(user.id)
+                );
+            }
+            // نحدّث كاش «آخر نقطة» إذا كانت بيانات المعاملات ناقصة حتى لو كان
+            // نموذج التقرير الحالي معدّلاً؛ هذا لا يمس المسودة (مفتاح مستقل) ولا يغيّر الحقول.
+            if (latest && !hasCompleteTransactionSnapshot(readSavedPoint())) saveLastPoint(latest);
+        } catch (error) {
+            console.warn('تعذر تهيئة نقطة الاستعادة من آخر تقرير:', error);
+        } finally {
+            lastPointSeedInProgress = false;
+        }
+    };
+    // النسخة الأولى لا تملك مفتاح lastReportPoint بعد؛ نأخذ أحدث تقرير لهذا
+    // الحساب مرة واحدة بالخلفية، أو نرقّي المفتاح القديم الذي لا يحوي جداول
+    // المعاملات، من دون تعطيل رسم الشاشة أو انتظار الشبكة.
+    setTimeout(() => {
+        const savedPoint = (() => {
+            try { return JSON.parse(localStorage.getItem(lastPointKey()) || ''); } catch (e) { return null; }
+        })();
+        if (!hasCompleteTransactionSnapshot(savedPoint)) startLastPointSeed();
+    }, 0);
 
     // V62: موقع المحل (GPS) — التقاط مشترك يستخدمه الزر وعملية الإرسال.
     const captureGps = () => new Promise((resolve) => {
@@ -388,8 +614,17 @@ async function handleReportPage() {
     };
     const saveFormState = () => {
         if (isFormDirty) {
-            localStorage.setItem(formStateKey(), JSON.stringify(getFormState()));
             const draft = document.getElementById('draftStatus');
+            try {
+                localStorage.setItem(formStateKey(), JSON.stringify(getFormState()));
+            } catch (error) {
+                console.warn('تعذر حفظ مسودة التقرير محلياً:', error);
+                if (draft) {
+                    draft.textContent = 'تعذر حفظ المسودة — تحقق من مساحة التخزين';
+                    draft.classList.add('show');
+                }
+                return;
+            }
             if (draft) {
                 draft.textContent = '✓ تُحفظ المسودة تلقائياً';
                 draft.classList.add('show');
@@ -728,7 +963,69 @@ async function handleReportPage() {
 
     const getSaleProducts = () => pickByCategory(isSaleCategory);
     const isDirectSaleEvent = () => String($('#event').val() || '').trim() === 'ترويج وبيع مباشر';
-    const getSaleDisplayPrice = (product) => isDirectSaleEvent() ? Number(product?.price || 0) : '';
+    const getSaleDisplayPrice = (product) => {
+        const campaign = String(campaignSelect.value || '').trim();
+        const productName = String(product?.name || '').trim();
+        const key = userProductPriceScopeKey(campaign, productName);
+        const personal = userProductPricesByKey.get(key);
+        return resolveReportSalePrice($('#event').val(), product?.price, personal?.price);
+    };
+    const refreshSaleOptionPrices = () => {
+        const products = getSaleProducts();
+        salesTableBody.querySelectorAll('.sale-product').forEach(select => {
+            Array.from(select.options || []).forEach(option => {
+                if (!option.value) return;
+                const product = products.find(p => String(p.name) === String(option.value));
+                if (product) option.dataset.price = String(getSaleDisplayPrice(product));
+            });
+        });
+    };
+    const refreshUneditedNewSaleRows = () => {
+        let changed = false;
+        salesTableBody.querySelectorAll('tr').forEach(row => {
+            if (row.dataset.priceRefreshable !== 'true' || row.dataset.priceManuallyEdited === 'true') return;
+            const productName = String($(row.querySelector('.sale-product')).val() || '').trim();
+            const product = getSaleProducts().find(p => String(p.name) === productName);
+            if (!product) return;
+            row.querySelector('.sale-price').value = getSaleDisplayPrice(product).toFixed(2);
+            changed = true;
+        });
+        if (changed) updateSaleTotals();
+    };
+    // Personal prices are not on the critical path for showing the report form.
+    // When the server responds, update selectable prices and only rows that were
+    // just added from the picker/scanner and have not been manually edited.
+    userProductPricesRequest.then(userPricesResponse => {
+        if (userPricesResponse?.status !== 'success' || !Array.isArray(userPricesResponse.prices)) return;
+        replaceUserProductPrices(userPricesResponse.prices);
+        saveUserProductPricesCache();
+        refreshSaleOptionPrices();
+        refreshUneditedNewSaleRows();
+    }).catch(error => {
+        console.warn('تعذر تحميل الأسعار الشخصية في الخلفية؛ ستبقى أسعار الكاش/Products متاحة:', error);
+    });
+    window.addEventListener('appDataRefreshed', () => {
+        try {
+            const cached = JSON.parse(localStorage.getItem(userProductPriceCacheKey()) || '[]');
+            replaceUserProductPrices(cached);
+            refreshSaleOptionPrices();
+        } catch (e) { console.warn('تعذر إعادة تحميل أسعار المستخدم من الكاش:', e); }
+    });
+    const rememberUserProductPricesFromReport = (reportData) => {
+        if (String(reportData?.event || '').trim() === 'ترويج وبيع مباشر') return;
+        const fallbackCampaign = String(reportData?.campaign || '').trim();
+        (Array.isArray(reportData?.sales) ? reportData.sales : []).forEach(sale => {
+            const campaign = String(sale?.campaign || fallbackCampaign).trim();
+            const product = String(sale?.product || '').trim();
+            const price = Number(sale?.price);
+            if (!campaign || !product || !Number.isFinite(price) || price < 0) return;
+            userProductPricesByKey.set(userProductPriceScopeKey(campaign, product), {
+                campaign, product, barcode: String(sale?.barcode || '').trim(), price
+            });
+        });
+        saveUserProductPricesCache();
+        refreshSaleOptionPrices();
+    };
     const getCompetitorProducts = () => Array.isArray(DB.competitorProducts)
         ? DB.competitorProducts.filter(p => p && p.name && !isCancelledProduct(p))
         : [];
@@ -854,7 +1151,8 @@ async function handleReportPage() {
                 product: product.name,
                 price: product.price,
                 quantity: 1,
-                barcode: barcode
+                barcode: barcode,
+                _refreshPriceOnLoad: true
             });
             status.textContent = `تمت إضافة «${product.name}» بسعر ${Number(product.price || 0).toFixed(2)} × 1.`;
             status.className = 'small mt-2 text-success';
@@ -870,39 +1168,61 @@ async function handleReportPage() {
         return true;
     };
 
-    let priceUpdateTimer = null;
-    const updateMasterProductPrice = async (row) => {
-        if (!navigator.onLine) return;
-        if (!isDirectSaleEvent()) return;
+    const pendingUserPriceSaveRequests = new Set();
+    const userPriceSaveSequenceByKey = new Map();
+    const updateUserProductPrice = async (row) => {
+        // سعر هذا النوع من الحدث يتبع Products المشتركة فقط؛ لا تحفظه كسعر شخصي.
+        if (isDirectSaleEvent() || !navigator.onLine || !row || !row.isConnected) return;
 
         const productSelect = row.querySelector('.sale-product');
         const product = String($(productSelect).val() || '').trim();
         const price = Number(row.querySelector('.sale-price')?.value);
         const campaign = String(campaignSelect.value || '').trim();
         const barcode = normalizeBarcode($(productSelect).find('option:selected').data('barcode') || '');
-
         if (!product || !campaign || !Number.isFinite(price) || price < 0) return;
 
+        const selectedProduct = product;
+        const scopeKey = userProductPriceScopeKey(campaign, selectedProduct);
+        const saveSequence = (userPriceSaveSequenceByKey.get(scopeKey) || 0) + 1;
+        userPriceSaveSequenceByKey.set(scopeKey, saveSequence);
         try {
-            const result = await apiPost('updateProductPrice', { product, price, campaign, barcode });
-            if (!result || result.status !== 'success') throw new Error(result?.message || 'تعذر تحديث السعر');
+            const result = await apiPost('saveUserProductPrice', { product, price, campaign, barcode });
+            if (!result || result.status !== 'success') throw new Error(result?.message || 'تعذر حفظ السعر الشخصي');
 
-            // السعر أصبح محفوظاً في Products. أعد تحميل بيانات الموقع كاملة من الـSheet
-            // حتى يصبح السعر الجديد هو السعر المعتمد فوراً في الواجهة والباركود.
-            await refreshAppCache({ silent: true, refreshReports: false });
-
-            // حدّث الصف الحالي أيضاً من البيانات الجديدة، بدون إعادة فرض السعر القديم.
-            row.querySelector('.sale-price').value = Number(result.price).toFixed(2);
-            updateSaleTotals();
+            // لا نكتب أبداً إلى Products. خزّن السعر ضمن مفتاح المستخدم الحالي.
+            // نتجاهل الاستجابة الأقدم للمادة نفسها إذا سبقتها عملية حفظ أحدث.
+            if (userPriceSaveSequenceByKey.get(scopeKey) === saveSequence) {
+                userProductPricesByKey.set(scopeKey, { campaign, product, barcode, price });
+                saveUserProductPricesCache();
+                refreshSaleOptionPrices();
+            }
         } catch (error) {
-            console.error('Immediate price update failed:', error);
-            showToast(`تعذر تحديث سعر «${product}» على الشيت: ${error.message || error}`, true);
+            console.error('Personal product price update failed:', error);
+            showToast(`تعذر حفظ السعر الخاص بك للمادة «${product}»: ${error.message || error}`, true);
         }
     };
 
-    const scheduleMasterProductPriceUpdate = (row) => {
-        clearTimeout(priceUpdateTimer);
-        priceUpdateTimer = setTimeout(() => updateMasterProductPrice(row), 120);
+    const scheduleUserProductPriceUpdate = (row) => {
+        if (!row) return;
+        clearTimeout(row._userProductPriceTimer);
+        row._userProductPriceTimer = setTimeout(() => {
+            row._userProductPriceTimer = null;
+            let request;
+            request = updateUserProductPrice(row).finally(() => pendingUserPriceSaveRequests.delete(request));
+            pendingUserPriceSaveRequests.add(request);
+        }, 650);
+    };
+
+    const flushPendingUserPriceSaves = async () => {
+        // عند إرسال التقرير، يُحفظ السعر النهائي مع المعاملات على الخادم. ألغِ
+        // المؤقتات التي لم تبدأ وانتظر الكتابات القائمة حتى لا تطغى كتابة قديمة.
+        salesTableBody.querySelectorAll('tr').forEach(row => {
+            clearTimeout(row._userProductPriceTimer);
+            row._userProductPriceTimer = null;
+        });
+        if (pendingUserPriceSaveRequests.size) {
+            await Promise.allSettled(Array.from(pendingUserPriceSaveRequests));
+        }
     };
 
     const createSaleRow = (sale = {}) => {
@@ -913,18 +1233,26 @@ async function handleReportPage() {
             products = products.concat([{ name: sale.product, price: 0, barcode: '', category: '' }]);
         }
         const existingProducts = Array.from(salesTableBody.querySelectorAll('.sale-product')).map(select => $(select).val());
-        if (sale.product && existingProducts.includes(sale.product) && !sale.price) return;
+        if (!stateRestoring && sale.product && existingProducts.includes(sale.product) && !sale.price) return;
 
         const row = document.createElement('tr');
+        row.dataset.priceRefreshable = sale._refreshPriceOnLoad === true ? 'true' : 'false';
+        row.dataset.priceManuallyEdited = 'false';
         const productOptions = products.map(p => {
             const safeName = String(p.name ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
             return `<option value="${safeName}" data-price="${getSaleDisplayPrice(p)}" data-barcode="${normalizeBarcode(p.barcode)}">${safeName}</option>`;
         }).join('');
-        const priceValue = isDirectSaleEvent() ? (sale.price !== undefined && sale.price !== '' ? Number(sale.price || 0).toFixed(2) : '0.00') : (sale.price !== undefined && sale.price !== '' ? Number(sale.price).toFixed(2) : '');
+        const defaultProduct = sale.product ? products.find(p => String(p.name) === String(sale.product)) : null;
+        const defaultPrice = defaultProduct ? getSaleDisplayPrice(defaultProduct) : '';
+        const priceValue = sale.price !== undefined && sale.price !== ''
+            ? Number(sale.price || 0).toFixed(2)
+            : (sale.product ? Number(defaultPrice || 0).toFixed(2) : (isDirectSaleEvent() ? '0.00' : ''));
         const quantityValue = sale.quantity !== undefined && sale.quantity !== '' ? sale.quantity : '';
 
         row.innerHTML = `<td><select class="form-select form-select-sm sale-product" required><option value="" selected disabled>اختر...</option>${productOptions}</select></td><td><input type="number" class="form-control form-control-sm sale-price" value="${priceValue}" step="0.01" required></td><td><input type="number" class="form-control form-control-sm sale-quantity" value="${quantityValue}" min="1" required></td><td><input type="text" class="form-control form-control-sm row-total" value="0.00" readonly></td><td><button type="button" class="btn btn-sm btn-outline-danger remove-row-btn"><i class="fa-solid fa-trash-can"></i></button></td>`;
         row.querySelector('.remove-row-btn').addEventListener('click', () => {
+            clearTimeout(row._userProductPriceTimer);
+            row._userProductPriceTimer = null;
             row.remove();
             updateSaleTotals();
             isFormDirty = true;
@@ -938,7 +1266,9 @@ async function handleReportPage() {
             const newPrice = $(this).find('option:selected').data('price');
             if (newPrice !== undefined && newPrice !== '') {
                 row.querySelector('.sale-price').value = parseFloat(newPrice).toFixed(2);
+                row.dataset.priceManuallyEdited = 'false';
             }
+            if (row.dataset.initializingSaleRow !== 'true') row.dataset.priceRefreshable = 'true';
             if (!stateRestoring) {
                 const chosen = String($(this).val() || '');
                 const alreadyPresent = chosen && Array.from(salesTableBody.querySelectorAll('tr'))
@@ -959,21 +1289,27 @@ async function handleReportPage() {
             saveFormState();
         });
         row.querySelector('.sale-price').addEventListener('input', () => {
+            row.dataset.priceManuallyEdited = 'true';
             updateSaleTotals();
             isFormDirty = true;
             saveFormState();
-            // تحديث السعر المعتمد تلقائياً بعد توقف المستخدم عن الكتابة.
-            scheduleMasterProductPriceUpdate(row);
+            // حفظ السعر ضمن حساب المستخدم الحالي بعد توقف الكتابة.
+            scheduleUserProductPriceUpdate(row);
         });
         row.querySelector('.sale-price').addEventListener('change', () => {
+            row.dataset.priceManuallyEdited = 'true';
             updateSaleTotals();
             isFormDirty = true;
             saveFormState();
-            scheduleMasterProductPriceUpdate(row);
+            scheduleUserProductPriceUpdate(row);
         });
 
         salesTableBody.appendChild(row);
-        if (sale.product) productSelect.val(sale.product).trigger('change');
+        if (sale.product) {
+            row.dataset.initializingSaleRow = 'true';
+            productSelect.val(sale.product).trigger('change');
+            delete row.dataset.initializingSaleRow;
+        }
         if (sale.price !== undefined && sale.price !== '') row.querySelector('.sale-price').value = Number(sale.price || 0).toFixed(2);
         if (sale.quantity !== undefined && sale.quantity !== '') row.querySelector('.sale-quantity').value = sale.quantity;
         updateSaleTotals();
@@ -1176,7 +1512,11 @@ async function handleReportPage() {
         }
         
         const saveOnlineOrQueue = async () => {
-            // اكتب التقرير كاملاً في IndexedDB قبل أي طلب شبكة أو تفريغ للنموذج،
+            // حدّث الكاش الشخصي فوراً كي يستخدم التقرير التالي السعر الذي اختاره
+            // المستخدم حتى لو أُرسل هذا التقرير إلى قائمة الانتظار دون اتصال.
+            rememberUserProductPricesFromReport(reportData);
+            await flushPendingUserPriceSaves();
+            // اكتب التقرير كاملاً في IndexedDB قبل أي طلب شبكة أو تفريغ للنموذج,
             // كي لا يضيع إذا أُغلق التطبيق قبل تأكيد الخادم.
             let pendingLocalId = '';
             try {
@@ -1318,8 +1658,11 @@ async function handleReportPage() {
     };
 
     const createCompetitorSaleRow = (sale = {}) => {
-        const products = getCompetitorProducts();
-        if (sale.product && !products.some(p => p.name === sale.product)) return;
+        let products = getCompetitorProducts();
+        if (sale.product && !products.some(p => p.name === sale.product)) {
+            // Preserve historical rows even if the master list changed or is not cached offline.
+            products = products.concat([{ name: sale.product, barcode: '' }]);
+        }
         const row = document.createElement('tr');
         const productOptions = products.map(p => {
             const safeName = escapeHtml(String(p.name ?? ''));
@@ -1411,7 +1754,7 @@ async function handleReportPage() {
     }
     addSaleRowBtn.addEventListener('click', () => { const c = campaignSelect.value; if (!c) { alert('يرجى اختيار نوع الحملة أولاً.'); return; } populateProductSelectionModal(c); productModal.show(); });
     productSearchInput.addEventListener('input', () => { const s = productSearchInput.value.toLowerCase().trim(); productSelectionTbody.querySelectorAll('tr').forEach(r => { r.style.display = r.cells[1].textContent.toLowerCase().includes(s) ? '' : 'none'; }); });
-    addSelectedProductsBtn.addEventListener('click', () => { productSelectionTbody.querySelectorAll('.product-select-check:checked').forEach(c => createSaleRow({ product: c.value, price: c.dataset.price })); updateSaleTotals(); productModal.hide(); isFormDirty = true; saveFormState(); });
+    addSelectedProductsBtn.addEventListener('click', () => { productSelectionTbody.querySelectorAll('.product-select-check:checked').forEach(c => createSaleRow({ product: c.value, price: c.dataset.price, _refreshPriceOnLoad: true })); updateSaleTotals(); productModal.hide(); isFormDirty = true; saveFormState(); });
     
     function populateExpenseSelectionModal(campaignName) {
         const products = getTastingProducts();
@@ -1500,8 +1843,9 @@ async function handleReportPage() {
        // updatePhoneNumberRequirement();
         updateSalesVisibility();
         updateCompetitorSalesVisibility();
-        // أسعار المبيعات تعتمد على Products فقط في ترويج وبيع مباشر؛ وفي باقي الأحداث يجب على المستخدم إدخال السعر.
-        salesTableBody.querySelectorAll('tr').forEach(row => { const sel=row.querySelector('.sale-product'); const name=String($(sel).val()||'').trim(); const master=getSaleProducts().find(p=>p.name===name); if(sel && master) row.querySelector('.sale-price').value = isDirectSaleEvent() ? Number(master.price||0).toFixed(2) : ''; });
+        // عند تغيير نوع الحدث نعيد تحميل السعر الشخصي للمستخدم (أو السعر الأساسي لأول مرة)،
+        // وتبقى الحقول قابلة للتعديل دون كتابة أي سعر إلى Products المشتركة.
+        salesTableBody.querySelectorAll('tr').forEach(row => { const sel=row.querySelector('.sale-product'); const name=String($(sel).val()||'').trim(); const master=getSaleProducts().find(p=>p.name===name); if(sel && master) { row.querySelector('.sale-price').value = Number(getSaleDisplayPrice(master)||0).toFixed(2); row.dataset.priceManuallyEdited = 'false'; } });
         document.querySelectorAll('.sale-price, .competitor-price').forEach(input => input.setCustomValidity(''));
         updateSaleTotals();
         const isDirectPromotion = $(this).val() === 'ترويج مباشر';
