@@ -150,6 +150,7 @@ async function forceLogout(message) {
     localStorage.removeItem('appDB');
     localStorage.removeItem('dbCacheTimestamp');
     localStorage.removeItem(formStateKey());
+    localStorage.removeItem(ownerScopedKey('reportFormLastStateSavedAt'));
     sessionStorage.removeItem(reportToEditKey());
     invalidateSmartCaches();
     // إعادة ضبط حالة الشاشات مثل زر الخروج حتى لا تبقى بيانات مستخدم سابق.
@@ -163,7 +164,7 @@ async function forceLogout(message) {
     navigateTo('login');
 }
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx9BqnSe9DGQZFDDpjxmi1KZOox_5Jp4LCrjltPo5eIeZQ5NXA8A6N58TT9tLIdl1wQ/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyBb3hLc5ciJwzAmNTKY-EWHC7rrFBZx1-1rYECNPNPNYRPS4n6x0KTrVpnKuI-3y9F/exec";
 const CACHE_DURATION_MINUTES = 1440;
 // V70: مسودّات المستخدم مربوطة بهويته. لو بقيت بمفتاح واحد لصاحب الجلسة
 // السابقة استعاد مستخدمٌ آخر مسودّة غيره (أو النقطة الأخيرة التي اختارها).
@@ -1381,6 +1382,7 @@ function bindShellUserControls() {
             localStorage.removeItem('appDB');
             localStorage.removeItem('dbCacheTimestamp');
             localStorage.removeItem(formStateKey());
+            localStorage.removeItem(ownerScopedKey('reportFormLastStateSavedAt'));
             sessionStorage.removeItem(reportToEditKey());
             invalidateSmartCaches();
             // V69: حذف لافتة إشعارات الرفض عند تسجيل الخروج.
