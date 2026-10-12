@@ -16,7 +16,8 @@
 // v81: direct-sale events use Products, other events use personal prices; personal prices load off the render-critical path.
 // v82: persist and restore complete per-user report drafts across app closes/reopens.
 // v83: permanent login (server persistent sessions) + faster first API connection.
-const CACHE_NAME = 'festival-app-v83-permanent-login';
+// v84: immediately redirect signed-in promoters to the external ticket system on every app entry.
+const CACHE_NAME = 'festival-app-v84-promoter-external-redirect';
 const APP_SHELL = [
   './index.html',
   './style.css','./core.js','./page-login.js','./page-reports.js','./page-expenses.js','./page-history.js','./page-dashboard.js','./page-movement.js','./page-attendance.js','./page-users.js','./page-salary.js','./manifest.json','./icons/icon.svg',

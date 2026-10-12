@@ -164,7 +164,7 @@ async function forceLogout(message) {
     navigateTo('login');
 }
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyYnhet9yPYbCa1le3cWTgNhbHLsgTEFavhgE0iqqi1CNFKvdfK_nUrKfGH4N79zKib/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwf30vqs50KIhCtIPjmCiKydBqGK0H4ljd5DuJTFVfaJ4_Kp7LGiEAVtDF8I7sbDLpt/exec";
 const CACHE_DURATION_MINUTES = 1440;
 // V70: مسودّات المستخدم مربوطة بهويته. لو بقيت بمفتاح واحد لصاحب الجلسة
 // السابقة استعاد مستخدمٌ آخر مسودّة غيره (أو النقطة الأخيرة التي اختارها).
@@ -1318,6 +1318,16 @@ function isPromoterAccount(u) {
     return r === 'user' && jp === 'مروج';
 }
 
+const PROMOTER_EXTERNAL_URL = 'https://ticketsystem.hamwi-int.com:8443/Templates.do?module=serviceRequest';
+
+function redirectPromoterToExternal(user) {
+    if (!isPromoterAccount(user)) return false;
+
+    // التحويل مباشرة في كل دخول للموقع، حتى لو سبق فتح الموقع في نفس جلسة التبويب.
+    // نستخدم replace حتى لا يعود زر الرجوع إلى لوحة التحكم للمروج.
+    window.location.replace(PROMOTER_EXTERNAL_URL);
+    return true;
+}
 function routeFromHash() {
     const h = (location.hash || '').replace(/^#\/?/, '');
     const name = h.split('?')[0];
@@ -1415,6 +1425,10 @@ function activateRoute() {
     let route = routeFromHash();
     const user = getStoredUser();
     const prevRoute = currentRoute;
+
+    if (user && redirectPromoterToExternal(user)) {
+        return;
+    }
 
     // حراسة الصلاحيات: بلا جلسة → شاشة الدخول، جلسة على الدخول → الرئيسية.
     // المروج مسموح له بالدوام والسلف المالية فقط.

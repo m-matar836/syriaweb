@@ -65,7 +65,10 @@ async function handleLoginPage() {
             // إظهار رسالة «تم التحقق بنجاح» قبل الانتقال. الآن الانتقال فوري،
             // فيختفي ثانية من زمن الإحساس بالدخول على كل مستخدم.
             // فحص إصدار الشيت منفصل ولا صلة له بهذا الانتقال.
-            const homeRoute = isPromoterAccount(loginResult.user) ? 'attendance' : 'reports';
+            if (redirectPromoterToExternal(loginResult.user)) {return;}
+
+            const homeRoute = isPromoterAccount(loginResult.user)? 'attendance' : 'reports';
+
             navigateTo(homeRoute);
             // V69: إشعار المرفوضات يظهر عند فتح الحساب بعد الدخول (تقرير/دوام/حركة مادة مرفوضة).
             // V73: لكن ليس قبل بيانات الشاشة الأولى. الإشعاران معاً يطلبان 7 ردود

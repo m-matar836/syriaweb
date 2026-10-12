@@ -182,6 +182,33 @@ test('isPromoterAccount: only role=user with a مروج job position', () => {
   assert.equal(s.isPromoterAccount(null), false);
 });
 
+test('promoter redirect: immediately redirects on every app entry in the same tab', () => {
+  const s = ctx();
+  const redirects = [];
+  s.location.replace = (url) => redirects.push(url);
+  s.localStorage.setItem('currentUser', JSON.stringify({
+    id: 'E003', role: 'user', jobPosition: 'مروج'
+  }));
+
+  s.activateRoute();
+  s.activateRoute();
+
+  assert.deepEqual(redirects, [
+    'https://ticketsystem.hamwi-int.com:8443/Templates.do?module=serviceRequest',
+    'https://ticketsystem.hamwi-int.com:8443/Templates.do?module=serviceRequest'
+  ]);
+});
+
+test('promoter redirect: does not redirect non-promoter roles or positions', () => {
+  const s = ctx();
+  const redirects = [];
+  s.location.replace = (url) => redirects.push(url);
+
+  assert.equal(s.redirectPromoterToExternal({ role: 'manager', jobPosition: 'مروج' }), false);
+  assert.equal(s.redirectPromoterToExternal({ role: 'user', jobPosition: 'مسؤول جرد' }), false);
+  assert.deepEqual(redirects, []);
+});
+
 test('session tokens: store, read and clear the auth token', () => {
   const s = ctx();
   s.storeAppToken('tok-123');
