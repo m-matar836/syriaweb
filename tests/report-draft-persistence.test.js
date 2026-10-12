@@ -59,6 +59,6 @@ test('clearing a sent draft also clears its timestamp, while failed submit leave
 });
 
 test('service worker cache is versioned for the new durable-draft code', () => {
-  assert.match(sw, /festival-app-v82-report-draft-persistence/);
+  assert.match(sw, /festival-app-v83-permanent-login/);
   assert.ok(sw.includes("'./page-reports.js'"), 'report module remains in the app shell');
 });

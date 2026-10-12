@@ -13,7 +13,7 @@ async function handleLoginPage() {
         submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جار التحقق...';
         errorMessage.textContent = '';
         try {
-            const loginResult = await apiPost('doLogin', { username, password });
+            const loginResult = await apiPost('doLogin', { username, password, remember: rememberMe });
             if (loginResult.status !== 'success') throw new Error('Invalid credentials');
 
             // V67: حفظ جلسة الدخول — تُرفق تلقائياً بكل طلب لاحق.
@@ -30,6 +30,9 @@ async function handleLoginPage() {
             // «تذكرني» لا يكفي أن يختار التخزين: يجب أن تُعطَّل مهلة الخمول،
             // وإلا انتهت الجلسة بعد ٨ ساعات رغم بقاء البيانات على الجهاز.
             if (typeof setRememberedSession === 'function') setRememberedSession(rememberMe);
+            // V83: اطلب من المتصفح تثبيت التخزين المحلي حتى لا يُمسح تلقائياً (Safari/Chrome)،
+            // فتبقى الجلسة الدائمة. طلب صامت لا يعرض أي نافذة ولا يؤثر إن رُفض.
+            if (rememberMe) { try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {} }
 
     // V70: نظّف كاشات المستخدم السابق من هذا المتصفح قبل قراءة أي
     // منها، وإلا رأى المستخدم الجديد تقارير أو دوام من جلسة غيره.

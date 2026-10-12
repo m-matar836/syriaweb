@@ -292,7 +292,7 @@ function getDataSyncStatus() {
 // الآن يُصدر doLogin رمز token، وتتحقق كل دوال القراءة/الكتابة من الرمز ثم
 // تستخرج الهوية والدور من ملف Employees (المصدر الموثوق) — أي قيمة يرسلها
 // العميل لهوية/دور تُتجاهل وتُستبدل بقيمة الخادم.
-// مدة الجلسة: 6 ساعات (الحد الأقصى المسموح لـ ScriptCache TTL).
+// مدة الجلسة: دائمة منزلقة (سنة تتجدد مع الاستخدام) عبر PropertiesService؛ الكاش (6 ساعات) للمسار السريع فقط.
 // ===============================================================
 const SESSION_CACHE_PREFIX_ = 'sess_';
 const SESSION_DURATION_SECONDS_ = 6 * 60 * 60;
@@ -361,12 +361,79 @@ function getEmployeeByIdOrUsername_(value) {
   return null;
 }
 
-// إنشاء جلسة وإرجاع الـ token الجديد.
-function createSession_(employee) {
+// ---------------------------------------------------------------
+// V83: جلسة دائمة. كاش السكربت لا يحفظ أكثر من 6 ساعات، لذلك كانت الجلسة تسقط
+// ويُطلب الدخول من جديد رغم «تذكرني». الآن تُحفظ الجلسة أيضاً في
+// PropertiesService (تبقى بعد انتهاء الكاش) بمدة طويلة منزلقة: تتجدد مع الاستخدام.
+// المسار السريع لم يتغير — الكاش أولاً، ولا تُقرأ الخصائص إلا عند غياب الكاش.
+// ---------------------------------------------------------------
+const PERSISTENT_SESSION_PREFIX_ = 'psess_';
+const PERSISTENT_SESSION_MS_ = 365 * 24 * 60 * 60 * 1000;
+const PERSISTENT_SESSION_SLIDE_AFTER_MS_ = 12 * 60 * 60 * 1000;
+const PERSISTENT_SESSION_MAX_ = 1200;
+const PERSISTENT_SESSION_PURGE_KEY_ = 'psessPurgeMs';
+const PERSISTENT_SESSION_PURGE_EVERY_MS_ = 60 * 60 * 1000;
+
+function warmSessionCache_(token, employeeId, expiresAt, csrf) {
+  try { SESSION_STORE_.put(SESSION_CACHE_PREFIX_ + token, employeeId + '|' + expiresAt, SESSION_DURATION_SECONDS_); } catch (e) {}
+  if (csrf) { try { SESSION_STORE_.put('csrf_' + token, csrf, SESSION_DURATION_SECONDS_); } catch (e) {} }
+}
+
+function readPersistentSession_(token) {
+  try {
+    const raw = PropertiesService.getScriptProperties().getProperty(PERSISTENT_SESSION_PREFIX_ + token);
+    if (!raw) return null;
+    const rec = JSON.parse(raw);
+    if (!rec || !rec.u || !rec.e) return null;
+    return rec;
+  } catch (e) { return null; }
+}
+
+function writePersistentSession_(token, rec) {
+  try { PropertiesService.getScriptProperties().setProperty(PERSISTENT_SESSION_PREFIX_ + token, JSON.stringify(rec)); return true; }
+  catch (e) { return false; }
+}
+
+// تنظيف الجلسات المنتهية، ومنع تضخم التخزين (حد الخصائص ~500KB). مرة كل ساعة كحد أقصى.
+function purgePersistentSessions_() {
+  try {
+    const now = Date.now();
+    const last = Number(SESSION_STORE_.get(PERSISTENT_SESSION_PURGE_KEY_) || 0);
+    if (now - last < PERSISTENT_SESSION_PURGE_EVERY_MS_) return;
+    SESSION_STORE_.put(PERSISTENT_SESSION_PURGE_KEY_, String(now), 3600);
+    const props = PropertiesService.getScriptProperties();
+    const all = props.getProperties();
+    const live = [];
+    Object.keys(all).forEach(function (k) {
+      if (k.indexOf(PERSISTENT_SESSION_PREFIX_) !== 0) return;
+      let rec = null;
+      try { rec = JSON.parse(all[k]); } catch (e) {}
+      if (!rec || !rec.e || Number(rec.e) < now) { props.deleteProperty(k); return; }
+      live.push({ k: k, e: Number(rec.e) });
+    });
+    if (live.length > PERSISTENT_SESSION_MAX_) {
+      live.sort(function (a, b) { return a.e - b.e; });
+      live.slice(0, live.length - PERSISTENT_SESSION_MAX_).forEach(function (x) { props.deleteProperty(x.k); });
+    }
+  } catch (e) {}
+}
+
+// إنشاء جلسة وإرجاع الـ token الجديد. persistent=false يبقيها 6 ساعات فقط كالسابق.
+function createSession_(employee, persistent) {
   const token = Utilities.getUuid().replace(/-/g, '');
-  const expiresAt = Date.now() + SESSION_DURATION_SECONDS_ * 1000;
-  try { SESSION_STORE_.put(SESSION_CACHE_PREFIX_ + token, employee.id + '|' + expiresAt, SESSION_DURATION_SECONDS_); } catch (e) {}
-  return { token, expiresAt };
+  const keep = persistent !== false;
+  const expiresAt = Date.now() + (keep ? PERSISTENT_SESSION_MS_ : SESSION_DURATION_SECONDS_ * 1000);
+  warmSessionCache_(token, employee.id, expiresAt, '');
+  return { token, expiresAt, persistent: keep };
+}
+
+// يربط الـ csrf بالجلسة، ويحفظ السجل الدائم (يُستدعى بعد توليد csrf في doLogin).
+function finalizeSession_(session, employeeId, csrf) {
+  warmSessionCache_(session.token, employeeId, session.expiresAt, csrf);
+  if (session.persistent) {
+    writePersistentSession_(session.token, { u: employeeId, e: session.expiresAt, c: csrf });
+    purgePersistentSessions_();
+  }
 }
 
 // إنهاء الجلسة فوراً (زر خروج) — لا يصلح الـ token بعدها.
@@ -374,6 +441,23 @@ function revokeSession_(token) {
   const t = String(token || '').trim();
   if (!t) return;
   try { SESSION_STORE_.remove(SESSION_CACHE_PREFIX_ + t); } catch (e) {}
+  try { SESSION_STORE_.remove('csrf_' + t); } catch (e) {}
+  try { PropertiesService.getScriptProperties().deleteProperty(PERSISTENT_SESSION_PREFIX_ + t); } catch (e) {}
+}
+
+// قيمة csrf الصحيحة للجلسة: من الكاش، وإلا من السجل الدائم.
+function getSessionCsrf_(token) {
+  const t = String(token || '').trim();
+  if (!t) return null;
+  let v = null;
+  try { v = SESSION_STORE_.get('csrf_' + t); } catch (e) {}
+  if (v) return v;
+  const rec = readPersistentSession_(t);
+  if (rec && rec.c && Number(rec.e) > Date.now()) {
+    try { SESSION_STORE_.put('csrf_' + t, rec.c, SESSION_DURATION_SECONDS_); } catch (e) {}
+    return rec.c;
+  }
+  return null;
 }
 
 // تحويل token صالح إلى كائن الموظف الموثّق — أي طلب بلا token أو بجلسة منتهية يُرفض.
@@ -382,7 +466,23 @@ function authenticateRequest_(token) {
   if (!t) throw unauthorizedError_('لا توجد جلسة دخول — سجّل الدخول أولاً');
   let entry = null;
   try { entry = SESSION_STORE_.get(SESSION_CACHE_PREFIX_ + t); } catch (e) {}
-  if (!entry) throw unauthorizedError_('انتهت الجلسة أو غير صالحة — سجّل الدخول مجدداً');
+  if (!entry) {
+    // V83: انتهى الكاش (6 ساعات) — نبحث عن الجلسة الدائمة قبل الرفض.
+    const rec = readPersistentSession_(t);
+    if (!rec) throw unauthorizedError_('انتهت الجلسة أو غير صالحة — سجّل الدخول مجدداً');
+    const now = Date.now();
+    if (Number(rec.e) < now) {
+      try { PropertiesService.getScriptProperties().deleteProperty(PERSISTENT_SESSION_PREFIX_ + t); } catch (e) {}
+      throw unauthorizedError_('انتهت مدة الجلسة — سجّل الدخول مجدداً');
+    }
+    // تمديد منزلق: كل استخدام يجدد السنة، بكتابة واحدة على الأكثر كل 12 ساعة.
+    if (Number(rec.e) - now < PERSISTENT_SESSION_MS_ - PERSISTENT_SESSION_SLIDE_AFTER_MS_) {
+      rec.e = now + PERSISTENT_SESSION_MS_;
+      writePersistentSession_(t, rec);
+    }
+    warmSessionCache_(t, rec.u, rec.e, rec.c);
+    entry = rec.u + '|' + rec.e;
+  }
   const parts = String(entry).split('|');
   if (Number(parts[1]) < Date.now()) {
     try { SESSION_STORE_.remove(SESSION_CACHE_PREFIX_ + t); } catch (e) {}
@@ -451,9 +551,7 @@ function doPost(e) {
       const emp = authenticateRequest_(raw.token);
       // CSRF protection: verify the request originates from our app
       const csrfToken = raw.csrfToken;
-      const sessionCsrfKey = 'csrf_' + raw.token;
-      let validCsrf = null;
-      try { validCsrf = SESSION_STORE_.get(sessionCsrfKey); } catch (e) {}
+      const validCsrf = getSessionCsrf_(raw.token);
       if (!validCsrf || validCsrf !== csrfToken) {
         throw unauthorizedError_('CSRF token invalid or missing');
       }
@@ -1066,10 +1164,11 @@ function doLogin(payload) {
     const rawUsername = String(row[2] || '').trim();
     resetLoginAttempts_(inputUsernameLower);
     // V67: إنشاء جلسة وإرجاع الـ token — كل الطلبات اللاحقة تتطلب هذا الـ token.
-    const session = createSession_({ id: rawId || rawUsername });
+    // V83: الجلسة دائمة افتراضياً؛ العميل يرسل remember=false فقط إذا ألغى «تذكرني».
+    const session = createSession_({ id: rawId || rawUsername }, payload.remember !== false);
     // CSRF: generate and store a CSRF token tied to this session
     const csrfToken = Utilities.getUuid().replace(/-/g, '');
-    try { SESSION_STORE_.put('csrf_' + session.token, csrfToken, SESSION_DURATION_SECONDS_); } catch (e) {}
+    finalizeSession_(session, rawId || rawUsername, csrfToken);
     // V74: استجابة الدخول صغيرة عمداً. لا نرسل getInitialData (قد تكون مئات الكيلوبايت)
     // داخل طلب المصادقة؛ الشاشة الهدف تقرأ كاش المتصفح أو تجلب البيانات مباشرة بعد الدخول.
     return {status:"success", token: session.token, csrfToken: csrfToken, expiresAt: session.expiresAt, user:{
@@ -3800,4 +3899,29 @@ function getSalaryAdvances(requester) {
     advances = advances.filter(a => String(a.employeeId).trim() === requesterId);
   }
   return { status: 'success', advances };
+}
+
+// ===============================================================
+// V83: تسخين السكربت — يقلل «البداية الباردة» لـ Apps Script (أبطأ جزء في أول طلب).
+// اختياري: شغّل installKeepWarmTrigger() مرة واحدة من محرر Apps Script.
+// لإيقافه شغّل removeKeepWarmTrigger(). لا يغيّر أي بيانات.
+// ===============================================================
+function keepWarm_() {
+  try { getEmployeeAuthRows_(); } catch (e) {}
+  try { warmInitialDataCache_(); } catch (e) {}
+}
+
+function installKeepWarmTrigger() {
+  ScriptApp.getProjectTriggers()
+    .filter(t => t.getHandlerFunction() === 'keepWarm_')
+    .forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('keepWarm_').timeBased().everyMinutes(5).create();
+  return { status: 'success', message: 'تم تفعيل تسخين السكربت كل 5 دقائق.' };
+}
+
+function removeKeepWarmTrigger() {
+  ScriptApp.getProjectTriggers()
+    .filter(t => t.getHandlerFunction() === 'keepWarm_')
+    .forEach(t => ScriptApp.deleteTrigger(t));
+  return { status: 'success', message: 'تم إيقاف تسخين السكربت.' };
 }

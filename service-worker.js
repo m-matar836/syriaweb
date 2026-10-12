@@ -15,7 +15,8 @@
 // v80: isolate sales-price overrides by authenticated user; never mutate shared Products prices from reports.
 // v81: direct-sale events use Products, other events use personal prices; personal prices load off the render-critical path.
 // v82: persist and restore complete per-user report drafts across app closes/reopens.
-const CACHE_NAME = 'festival-app-v82-report-draft-persistence';
+// v83: permanent login (server persistent sessions) + faster first API connection.
+const CACHE_NAME = 'festival-app-v83-permanent-login';
 const APP_SHELL = [
   './index.html',
   './style.css','./core.js','./page-login.js','./page-reports.js','./page-expenses.js','./page-history.js','./page-dashboard.js','./page-movement.js','./page-attendance.js','./page-users.js','./page-salary.js','./manifest.json','./icons/icon.svg',
