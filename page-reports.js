@@ -366,8 +366,17 @@ async function handleReportPage() {
         }
     };
     const applyLastPoint = async () => {
-        let last;
-        try { last = JSON.parse(localStorage.getItem(lastPointKey()) || ''); } catch (e) { return; }
+        let last = null;
+        // عدم وجود نسخة محلية أو تلفها يجب ألا يعطّل الزر بصمت؛ نحاول جلب
+        // آخر تقرير محفوظ من الخادم، ثم نعرض رسالة واضحة إذا لم تتوفر بيانات.
+        try {
+            const savedPointRaw = localStorage.getItem(lastPointKey());
+            last = savedPointRaw ? JSON.parse(savedPointRaw) : null;
+            if (!last || typeof last !== 'object' || Array.isArray(last)) last = null;
+        } catch (error) {
+            console.warn('تعذرت قراءة نسخة آخر نقطة المحلية؛ ستتم محاولة جلبها من السجل:', error);
+            last = null;
+        }
         // لا نعرض نقطة قديمة ذات موقع فقط بينما عملية ترقية بيانات المعاملات
         // لم تكتمل؛ انتظر جلب آخر تقرير ثم أعد قراءة النسخة المحفوظة.
         if (!hasCompleteTransactionSnapshot(last)) {
@@ -375,7 +384,14 @@ async function handleReportPage() {
             if (seedPromise) {
                 showToast('جارٍ تحميل المبيعات ومبيعات المنافس والمصاريف لآخر نقطة...');
                 await seedPromise;
-                try { last = JSON.parse(localStorage.getItem(lastPointKey()) || ''); } catch (e) { return; }
+                try {
+                    const refreshedPointRaw = localStorage.getItem(lastPointKey());
+                    last = refreshedPointRaw ? JSON.parse(refreshedPointRaw) : null;
+                    if (!last || typeof last !== 'object' || Array.isArray(last)) last = null;
+                } catch (error) {
+                    console.warn('تعذرت قراءة آخر نقطة بعد محاولة التحديث:', error);
+                    last = null;
+                }
             }
         }
         if (!last) {

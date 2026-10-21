@@ -204,6 +204,37 @@ test('last-point restore populates every point field and creates an option for a
     'a saved direct-promotion market must be selectable even if it was never in Locations');
 });
 
+test('last-point restore fetches the latest report when the local snapshot is missing', async () => {
+  const { els, c } = await openReportsView();
+  c.sandbox.apiGet = async (action, params) => {
+    assert.equal(action, 'getReportsPage');
+    assert.equal(params.targetUserId, 'E9');
+    assert.equal(params.pageSize, '1');
+    return {
+      status: 'success',
+      items: [{
+        id: 52, createdById: 'E9', governorate: 'دمشق', region: 'الشام', market: 'نقطة من السجل',
+        campaign: 'حملة مستعادة', event: 'ترويج مولات', eventDays: 1,
+        transactionDataVersion: 2,
+        sales: [{ product: 'مبيع من السجل', price: 6, quantity: 2 }],
+        salesOfCompetitor: [{ product: 'منافس من السجل', price: 4, quantity: 1 }],
+        expenses: [{ item: 'مصروف من السجل', quantity: 3 }]
+      }]
+    };
+  };
+  c.localStorage.removeItem('lastReportPoint::boss');
+
+  els.restoreLastPointBtn.dispatch('click');
+  await new Promise(resolve => setTimeout(resolve, 40));
+
+  assert.equal(els.market_name.value, 'نقطة من السجل', 'the latest point should be restored from report history');
+  assert.equal(els['sales-table-body'].children.length, 1, 'sales from report history should be restored');
+  assert.equal(els['competitor-sales-table-body'].children.length, 1, 'competitor sales should be restored');
+  assert.equal(els['expenses-table-body'].children.length, 1, 'expenses should be restored');
+  const saved = JSON.parse(c.localStorage.getItem('lastReportPoint::boss'));
+  assert.equal(saved.market, 'نقطة من السجل', 'the fetched snapshot should be cached for the next click');
+});
+
 test('last-point restore also restores sales, competitor sales, and expenses', async () => {
   const { els, c } = await openReportsView();
   c.localStorage.setItem('lastReportPoint::boss', JSON.stringify({
