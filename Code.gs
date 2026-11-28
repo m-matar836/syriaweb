@@ -1967,85 +1967,113 @@ const REPORT_SERVER_OWNED_COLUMNS = [
 ];
 function handleReportSubmission(reportData, authenticatedUserId) {
   reportData = reportData || {};
-  ensureReportsColumn('createdById');
-  ensureReportsColumn('createdByName');
-  // V50: أعمدة الإثباتات وحالة الاعتماد (تُنشأ تلقائياً عند الحاجة).
-  ['photo', 'signature', 'approvalStatus', 'approvedBy', 'approvedAt'].forEach(ensureReportsColumn);
-  // V61: أعمدة أثر التعديل والموقع الجغرافي والحذف الناعم.
-  ['editedAt', 'editedBy', 'latitude', 'longitude', 'deletedAt', 'deletedBy'].forEach(ensureReportsColumn);
-  const submittedUserId = String(reportData.userId || reportData.createdById || '').trim();
-  const submittedUserName = String(reportData.userName || reportData.createdByName || '').trim();
-  // رقم الهاتف اختياري دائماً ولا يُشترط في أي نوع من الأحداث. كان شرطاً
-  // لنوع واحد ("ترويج وبيع غير مباشر") فيتحقق في الخادم فقط، فكان الحقل يبدو
-  // اختيارياً في النموذج ثم يرفض الحفظ برسالة لا تربط الخطأ بالحقل.
-  const phoneNumber = String(reportData.phoneNumber || '').trim();
-  // المسافات وحدها ليست رقماً. الصف يُبنى من reportData مباشرة (انظر newRow)،
-  // فنُعيد القيمة بعد التشذيب وإلا خُزِّنت الخلية بمسافات كأنها رقم هاتف.
-  reportData.phoneNumber = phoneNumber;
-  ensureReportsColumn('phoneNumber');
-  const headers = reportsSheet.getRange(1,1,1,reportsSheet.getLastColumn()).getValues()[0];
-  const reportId = String(reportData.id);
-  const existingRowIndex = reportRowIndexById(reportId);
-  // عند التعديل نُبقي مالك التقرير الأصلي كما هو.
-  if (existingRowIndex !== -1) {
-    const existingRow = reportsSheet.getRange(existingRowIndex + 2, 1, 1, headers.length).getValues()[0];
-    const ownerIdCol = headers.findIndex(h => normalizeHeaderName(h) === normalizeHeaderName('createdById'));
-    const ownerNameCol = headers.findIndex(h => normalizeHeaderName(h) === normalizeHeaderName('createdByName'));
-    if (ownerIdCol >= 0 && String(existingRow[ownerIdCol] || '').trim()) reportData.createdById = String(existingRow[ownerIdCol]);
-    if (ownerNameCol >= 0 && String(existingRow[ownerNameCol] || '').trim()) reportData.createdByName = String(existingRow[ownerNameCol]);
-    // V67: عند التعديل يُسمح للحفظ لمالك التقرير أو لإداري/مدير/مدقق فقط.
-    const ownerId = ownerIdCol >= 0 ? String(existingRow[ownerIdCol] || '').trim() : '';
-    const ownerName = ownerNameCol >= 0 ? String(existingRow[ownerNameCol] || '').trim() : '';
-    const requesterRole = String(reportData.role || '').trim().toLowerCase();
-    const isOwner = ownerId !== '' && submittedUserId !== '' && ownerId === submittedUserId;
-    if (!isOwner && requesterRole !== 'admin' && requesterRole !== 'manager' && requesterRole !== 'auditor') {
-      const ownerLabel = ownerName || ownerId || 'شخص آخر';
-      throw new Error('لا يمكنك تعديل تقرير أنشأه ' + ownerLabel + ' — هذه الصلاحية لصاحب التقرير أو للإداري/المدير فقط');
+  const submissionToken = String(reportData.submissionToken || '').trim();
+  const scriptCache = CacheService.getScriptCache();
+  const lock = LockService.getScriptLock();
+  const hasLock = lock.tryLock(10000);
+
+  if (!hasLock) {
+    throw new Error('الخادم مشغول حالياً بمعالجة طلب آخر، يرجى المحاولة بعد قليل.');
+  }
+
+  try {
+    if (submissionToken) {
+      const cacheKey = 'submitted_report_token_' + submissionToken;
+      const cachedResponse = scriptCache.get(cacheKey);
+      if (cachedResponse) {
+        try {
+          return JSON.parse(cachedResponse);
+        } catch (_) {}
+      }
     }
-    // Rule: these are the server's columns, not the form's. Take the stored
-    // value and ignore whatever the request sent — a payload that tries to
-    // set or clear them must not be able to forge or wipe an approval.
-    REPORT_SERVER_OWNED_COLUMNS.forEach(name => {
-      const col = headers.findIndex(h => normalizeHeaderName(h) === normalizeHeaderName(name));
-      if (col >= 0) reportData[name] = existingRow[col];
-      else delete reportData[name];
-    });
+
+    ensureReportsColumn('createdById');
+    ensureReportsColumn('createdByName');
+    // V50: أعمدة الإثباتات وحالة الاعتماد (تُنشأ تلقائياً عند الحاجة).
+    ['photo', 'signature', 'approvalStatus', 'approvedBy', 'approvedAt'].forEach(ensureReportsColumn);
+    // V61: أعمدة أثر التعديل والموقع الجغرافي والحذف الناعم.
+    ['editedAt', 'editedBy', 'latitude', 'longitude', 'deletedAt', 'deletedBy'].forEach(ensureReportsColumn);
+    const submittedUserId = String(reportData.userId || reportData.createdById || '').trim();
+    const submittedUserName = String(reportData.userName || reportData.createdByName || '').trim();
+    // رقم الهاتف اختياري دائماً ولا يُشترط في أي نوع من الأحداث. كان شرطاً
+    // لنوع واحد ("ترويج وبيع غير مباشر") فيتحقق في الخادم فقط، فكان الحقل يبدو
+    // اختيارياً في النموذج ثم يرفض الحفظ برسالة لا تربط الخطأ بالحقل.
+    const phoneNumber = String(reportData.phoneNumber || '').trim();
+    // المسافات وحدها ليست رقماً. الصف يُبنى من reportData مباشرة (انظر newRow)،
+    // فنُعيد القيمة بعد التشذيب وإلا خُزِّنت الخلية بمسافات كأنها رقم هاتف.
+    reportData.phoneNumber = phoneNumber;
+    ensureReportsColumn('phoneNumber');
+    const headers = reportsSheet.getRange(1,1,1,reportsSheet.getLastColumn()).getValues()[0];
+    const reportId = String(reportData.id);
+    const existingRowIndex = reportRowIndexById(reportId);
+    // عند التعديل نُبقي مالك التقرير الأصلي كما هو.
+    if (existingRowIndex !== -1) {
+      const existingRow = reportsSheet.getRange(existingRowIndex + 2, 1, 1, headers.length).getValues()[0];
+      const ownerIdCol = headers.findIndex(h => normalizeHeaderName(h) === normalizeHeaderName('createdById'));
+      const ownerNameCol = headers.findIndex(h => normalizeHeaderName(h) === normalizeHeaderName('createdByName'));
+      if (ownerIdCol >= 0 && String(existingRow[ownerIdCol] || '').trim()) reportData.createdById = String(existingRow[ownerIdCol]);
+      if (ownerNameCol >= 0 && String(existingRow[ownerNameCol] || '').trim()) reportData.createdByName = String(existingRow[ownerNameCol]);
+      // V67: عند التعديل يُسمح للحفظ لمالك التقرير أو لإداري/مدير/مدقق فقط.
+      const ownerId = ownerIdCol >= 0 ? String(existingRow[ownerIdCol] || '').trim() : '';
+      const ownerName = ownerNameCol >= 0 ? String(existingRow[ownerNameCol] || '').trim() : '';
+      const requesterRole = String(reportData.role || '').trim().toLowerCase();
+      const isOwner = ownerId !== '' && submittedUserId !== '' && ownerId === submittedUserId;
+      if (!isOwner && requesterRole !== 'admin' && requesterRole !== 'manager' && requesterRole !== 'auditor') {
+        const ownerLabel = ownerName || ownerId || 'شخص آخر';
+        throw new Error('لا يمكنك تعديل تقرير أنشأه ' + ownerLabel + ' — هذه الصلاحية لصاحب التقرير أو للإداري/المدير فقط');
+      }
+      // Rule: these are the server's columns, not the form's. Take the stored
+      // value and ignore whatever the request sent — a payload that tries to
+      // set or clear them must not be able to forge or wipe an approval.
+      REPORT_SERVER_OWNED_COLUMNS.forEach(name => {
+        const col = headers.findIndex(h => normalizeHeaderName(h) === normalizeHeaderName(name));
+        if (col >= 0) reportData[name] = existingRow[col];
+        else delete reportData[name];
+      });
+    }
+
+    // ملكية التقرير: تُحفظ عند الإنشاء، وعند التعديل يتم الحفاظ على المالك الأصلي أعلاه.
+    if (existingRowIndex === -1) {
+      reportData.createdById = submittedUserId;
+      reportData.createdByName = submittedUserName;
+      // تقرير جديد يبدأ بلا اعتماد. بدون هذا كان بإمكان الطلب إنشاء تقرير
+      // يصل مسبقاً بحالة "معتمد" متجاوزاً reviewReport بالكامل.
+      REPORT_SERVER_OWNED_COLUMNS.forEach(name => { reportData[name] = ''; });
+    } else {
+      // V61: سجل آخر تعديل — القيمة تُرسل من الواجهة وإلا نأخذ هوية المستخدم الحالي.
+      reportData.editedAt = String(reportData.editedAt || new Date().toISOString());
+      reportData.editedBy = String(reportData.editedBy || submittedUserName || submittedUserId || '');
+    }
+
+    const newRow = headers.map(header => reportData[header] === undefined ? '' : (Array.isArray(reportData[header]) ? JSON.stringify(reportData[header]) : reportData[header]));
+
+    // Prices entered in the report become the current user's defaults only; never
+    // write them back to the shared Products sheet from a report submission.
+    saveUserProductPricesFromReport_(reportData, authenticatedUserId);
+
+    if (existingRowIndex !== -1) {
+      reportsSheet.getRange(existingRowIndex+2,1,1,newRow.length).setValues([newRow]);
+      clearReportDetails(reportId);
+    } else {
+      reportsSheet.appendRow(newRow);
+    }
+
+    addReportDetails(reportData);
+    syncReportExpensesToFestivalMovement(reportData);
+    SpreadsheetApp.flush();
+    clearInitialDataCache_();
+    clearReportsCache_();
+    cache.removeAll(['allReports','allReports_v2']);
+
+    const responseObj = {status:'success', reportId:reportId};
+    if (submissionToken) {
+      scriptCache.put('submitted_report_token_' + submissionToken, JSON.stringify(responseObj), 600);
+    }
+    return responseObj;
+  } finally {
+    lock.releaseLock();
   }
-
-  // ملكية التقرير: تُحفظ عند الإنشاء، وعند التعديل يتم الحفاظ على المالك الأصلي أعلاه.
-  if (existingRowIndex === -1) {
-    reportData.createdById = submittedUserId;
-    reportData.createdByName = submittedUserName;
-    // تقرير جديد يبدأ بلا اعتماد. بدون هذا كان بإمكان الطلب إنشاء تقرير
-    // يصل مسبقاً بحالة "معتمد" متجاوزاً reviewReport بالكامل.
-    REPORT_SERVER_OWNED_COLUMNS.forEach(name => { reportData[name] = ''; });
-  } else {
-    // V61: سجل آخر تعديل — القيمة تُرسل من الواجهة وإلا نأخذ هوية المستخدم الحالي.
-    reportData.editedAt = String(reportData.editedAt || new Date().toISOString());
-    reportData.editedBy = String(reportData.editedBy || submittedUserName || submittedUserId || '');
-  }
-
-  const newRow = headers.map(header => reportData[header] === undefined ? '' : (Array.isArray(reportData[header]) ? JSON.stringify(reportData[header]) : reportData[header]));
-
-  // Prices entered in the report become the current user's defaults only; never
-  // write them back to the shared Products sheet from a report submission.
-  saveUserProductPricesFromReport_(reportData, authenticatedUserId);
-
-  if (existingRowIndex !== -1) {
-    reportsSheet.getRange(existingRowIndex+2,1,1,newRow.length).setValues([newRow]);
-    clearReportDetails(reportId);
-  } else {
-    reportsSheet.appendRow(newRow);
-  }
-
-  addReportDetails(reportData);
-  syncReportExpensesToFestivalMovement(reportData);
-  clearInitialDataCache_();
-  clearReportsCache_();
-  cache.removeAll(['allReports','allReports_v2']);
-  return {status:'success', reportId:reportId};
 }
-
 // تحويل قيم التاريخ والوقت القادمة من Google Sheets إلى صيغة مناسبة
 // مباشرة لحقول HTML من نوع date / time.
 // مهم عند التعديل: نقرأ القيمة الفعلية من Reports ثم نعيدها كـ yyyy-MM-dd و HH:mm.

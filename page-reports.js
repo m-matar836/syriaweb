@@ -1560,176 +1560,178 @@ methodSelect?.addEventListener('change', () => { isFormDirty = true; saveFormSta
         return `تم العثور على ${matches.length} تقرير مكرر محتمل بنفس المحل (${market}) والتاريخ (${date}):\n${shown}${extra}\n\nهل تريد الحفظ على أي حال؟`;
     };
 
+    let isSubmittingReport = false;
+    let activeSubmissionToken = '';
+
+    const setSubmitButtonsBusy = (busy) => {
+        if (mainSubmitBtn) mainSubmitBtn.disabled = Boolean(busy);
+        if (submitAndAddAnotherBtn) submitAndAddAnotherBtn.disabled = Boolean(busy);
+    };
+
     const handleFormSubmit = async (event, editId, addAnother = false) => {
-        if(event) event.preventDefault();
+        if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+        if (isSubmittingReport) return;
+
         const firstInvalidPrice = validateRequiredPrices();
         if (firstInvalidPrice) firstInvalidPrice.focus();
         if (!reportForm.checkValidity()) {
-            if(event) event.stopPropagation();
             reportForm.classList.add('was-validated');
             return;
         }
-        // «الأ‍♂️ المتواجدين ضمن النقطة» مطلوب. The four inputs holding the value
-        // are type=hidden, which the HTML spec bars from constraint validation,
-        // so checkValidity() above cannot catch this one.
         if (!validatePromotersPresence()) {
-            if(event) event.stopPropagation();
             reportForm.classList.add('was-validated');
             document.getElementById('openPromotersBtn')?.focus();
             return;
         }
 
-        const submittedDraft = getFormState();
-        const submittedDraftSnapshot = JSON.stringify(submittedDraft);
-        const reportData = { ...submittedDraft };
-        isFormDirty = false;
-        
-        reportData.id = editId || Date.now();
-        reportData.createdAt = editId ? originalCreatedAt : new Date().toLocaleString('ar-EG');
-        reportData.promoters = [reportData.promoter1, reportData.promoter2, reportData.promoter3, reportData.promoter4].filter(p => p && p !== 'غير محدد');
-        reportData.supervisor = supervisorInput.value;
-        reportData.participants = [...new Set([reportData.coordinator, reportData.inventoryDependency, reportData.supervisor, ...reportData.promoters].filter(Boolean))];
+        isSubmittingReport = true;
+        setSubmitButtonsBusy(true);
+        const submissionToken = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        activeSubmissionToken = submissionToken;
 
-        // V61: أثر التعديل — يُرسل مع التقرير ويخزّنه الخادم في عمودي editedAt/editedBy.
-        if (editId) {
-            reportData.editedAt = new Date().toISOString();
-            reportData.editedBy = reportData.createdByName || reportData.createdById || '';
-        }
+        try {
+            const submittedDraft = getFormState();
+            const submittedDraftSnapshot = JSON.stringify(submittedDraft);
+            const reportData = { ...submittedDraft };
+            isFormDirty = false;
 
-        // V61: التقاط الموقع إن أمكن (اختياري، دون إمساك المستخدم أو الإرسال).
-        await tryCaptureGps(reportData);
+            reportData.id = editId || Date.now();
+            reportData.submissionToken = submissionToken;
+            reportData.createdAt = editId ? originalCreatedAt : new Date().toLocaleString('ar-EG');
+            reportData.promoters = [reportData.promoter1, reportData.promoter2, reportData.promoter3, reportData.promoter4].filter(p => p && p !== 'غير محدد');
+            reportData.supervisor = supervisorInput.value;
+            reportData.participants = [...new Set([reportData.coordinator, reportData.inventoryDependency, reportData.supervisor, ...reportData.promoters].filter(Boolean))];
 
-        // V61: تنبيه التكرار المحتمل قبل فتح نافذة الحفظ.
-        if (!editId) {
-            const dupMsg = await findDuplicateReports(reportData);
-            if (dupMsg && !confirm(dupMsg)) {
-                isFormDirty = true;
-                saveFormState();
-                return;
+            if (editId) {
+                reportData.editedAt = new Date().toISOString();
+                reportData.editedBy = reportData.createdByName || reportData.createdById || '';
             }
-        }
-        
-        if (addAnother) {
-            showToast('التقرير قيد الحفظ في الخلفية...');
-        } else {
-            document.querySelector('#successModal .fs-5').textContent = 'التقرير قيد الحفظ في الخلفية...';
-            document.getElementById('success-spinner').style.display = 'inline-block';
-            viewReportBtn.classList.add('disabled');
-            successModal.show();
-        }
-        
-        const saveOnlineOrQueue = async () => {
-            // حدّث الكاش الشخصي فوراً كي يستخدم التقرير التالي السعر الذي اختاره
-            // المستخدم حتى لو أُرسل هذا التقرير إلى قائمة الانتظار دون اتصال.
-            rememberUserProductPricesFromReport(reportData);
-            await flushPendingUserPriceSaves();
-            // اكتب التقرير كاملاً في IndexedDB قبل أي طلب شبكة أو تفريغ للنموذج,
-            // كي لا يضيع إذا أُغلق التطبيق قبل تأكيد الخادم.
-            let pendingLocalId = '';
-            try {
-                pendingLocalId = await queueReportOffline(reportData, { registerSync: false });
+
+            await tryCaptureGps(reportData);
+
+            if (!editId) {
+                const dupMsg = await findDuplicateReports(reportData);
+                if (dupMsg && !confirm(dupMsg)) {
+                    isFormDirty = true;
+                    saveFormState();
+                    return;
+                }
+            }
+
+            if (addAnother) {
+                showToast('التقرير قيد الحفظ في الخلفية...');
+            } else {
+                document.querySelector('#successModal .fs-5').textContent = 'التقرير قيد الحفظ في الخلفية...';
+                document.getElementById('success-spinner').style.display = 'inline-block';
+                viewReportBtn.classList.add('disabled');
+                successModal.show();
+            }
+
+            const saveOnlineOrQueue = async () => {
+                rememberUserProductPricesFromReport(reportData);
+                await flushPendingUserPriceSaves();
+                let pendingLocalId = '';
                 try {
-                    if (localStorage.getItem(formStateKey()) === submittedDraftSnapshot) clearFormDraft();
-                } catch (e) { /* يبقى التقرير كاملاً في IndexedDB */ }
-                if (addAnother) resetFullForm();
-            } catch (storageError) {
-                // لا نمنع الإرسال المتصل في متصفح لا يدعم IndexedDB؛ تبقى
-                // المسودة المحلية حتى ينجح الإرسال. دون اتصال لا نمسحها أبداً.
-                if (!navigator.onLine) throw storageError;
-                console.warn('تعذر إنشاء نسخة انتظار محلية قبل الإرسال:', storageError);
-            }
-
-            if (!navigator.onLine) {
-                if (!pendingLocalId) throw new Error('تعذر حفظ التقرير محلياً؛ لم تُحذف المسودة. أعد المحاولة عند توفر التخزين.');
-                registerBackgroundSync();
-                return { queued: true, localId: pendingLocalId };
-            }
-            try {
-                const result = await apiPost('submitReport', reportData);
-                if (!result || result.status !== 'success') throw new Error(result?.message || 'فشل الحفظ');
-                if (pendingLocalId) {
-                    try { await removePendingReport(pendingLocalId); }
-                    catch (cleanupError) { console.warn('Report sent; pending copy cleanup will retry:', cleanupError); }
-                } else {
+                    pendingLocalId = await queueReportOffline(reportData, { registerSync: false });
                     try {
                         if (localStorage.getItem(formStateKey()) === submittedDraftSnapshot) clearFormDraft();
                     } catch (e) {}
                     if (addAnother) resetFullForm();
+                } catch (storageError) {
+                    if (!navigator.onLine) throw storageError;
+                    console.warn('تعذر إنشاء نسخة انتظار محلية قبل الإرسال:', storageError);
                 }
-                // Do NOT rebuild the whole master-data cache after every report.
-                // Reports do not change Products/Locations/Employees, so a full refresh here
-                // only adds a large network round-trip and JSON parsing cost. The server
-                // invalidates the report cache on save; history will fetch the fresh report list
-                // when opened. Keep the current in-memory product cache intact.
-                invalidateReportsCache();
-                window.dispatchEvent(new CustomEvent('reportsCacheInvalidated'));
-                return result;
-            } catch (error) {
-                // في حالة انقطاع الشبكة أثناء الإرسال، خزّن التقرير للمزامنة.
-                const networkFailure = !navigator.onLine || error instanceof TypeError ||
-                    /failed to fetch|network|load failed/i.test(String(error.message || ''));
-                if (networkFailure) {
+
+                if (!navigator.onLine) {
+                    if (!pendingLocalId) throw new Error('تعذر حفظ التقرير محلياً؛ لم تُحذف المسودة. أعد المحاولة عند توفر التخزين.');
+                    registerBackgroundSync();
+                    return { queued: true, localId: pendingLocalId };
+                }
+                try {
+                    const result = await apiPost('submitReport', reportData);
+                    if (!result || result.status !== 'success') throw new Error(result?.message || 'فشل الحفظ');
                     if (pendingLocalId) {
-                        registerBackgroundSync();
-                        return { queued: true, localId: pendingLocalId };
-                    }
-                }
-                // حتى أخطاء الخادم لا تحذف النسخة المحلية؛ تبقى ظاهرة في قائمة المزامنة.
-                throw error;
-            }
-        };
-
-        saveOnlineOrQueue()
-            .then(result => {
-                resetAfterSubmitSuccess = true;
-                saveLastPoint(reportData);
-                if (result.queued) {
-                    updateOfflineStatus();
-                    if (addAnother) {
-                        showToast('تم حفظ التقرير محلياً وسيتم إرساله تلقائياً عند عودة الإنترنت.');
+                        try { await removePendingReport(pendingLocalId); }
+                        catch (cleanupError) { console.warn('Report sent; pending copy cleanup will retry:', cleanupError); }
                     } else {
-                        document.querySelector('#successModal .fs-5').textContent = 'تم حفظ التقرير محلياً — بانتظار الإنترنت للمزامنة';
-                        document.getElementById('success-spinner').style.display = 'none';
-                        viewReportBtn.classList.add('disabled');
-                        successModal.show();
+                        try {
+                            if (localStorage.getItem(formStateKey()) === submittedDraftSnapshot) clearFormDraft();
+                        } catch (e) {}
+                        if (addAnother) resetFullForm();
                     }
-                    return;
-                }
-
-                spawnConfetti();
-
-                if (addAnother) {
-                    // resetFullForm() تم استدعاؤها مسبقاً، وتشمل تفريغ الأشخاص المتواجدين.
-                    showToast('تم حفظ التقرير السابق بنجاح.');
-                } else {
-                    // بعد نجاح إرسال تقرير جديد فقط، نفرّغ الأشخاص المتواجدين ضمن النقطة.
-                    // لا نفرّغ نموذج التعديل حتى يبقى التقرير المعروض كما هو.
-                    if (!editId) {
-                        setSelectedPromoters([]);
-                        if (promotersSelectionTbody) {
-                            promotersSelectionTbody.querySelectorAll('.promoter-checkbox').forEach(cb => {
-                                cb.checked = false;
-                            });
+                    invalidateReportsCache();
+                    window.dispatchEvent(new CustomEvent('reportsCacheInvalidated'));
+                    return result;
+                } catch (error) {
+                    const networkFailure = !navigator.onLine || error instanceof TypeError ||
+                        /failed to fetch|network|load failed/i.test(String(error.message || ''));
+                    if (networkFailure) {
+                        if (pendingLocalId) {
+                            registerBackgroundSync();
+                            return { queued: true, localId: pendingLocalId };
                         }
                     }
-                    document.querySelector('#successModal .fs-5').textContent = 'تم حفظ التقرير بنجاح!';
-                    document.getElementById('success-spinner').style.display = 'none';
-                    viewReportBtn.href = '#/history';
-                    sessionStorage.setItem('spaScrollReportId', String(result.reportId));
-                    viewReportBtn.classList.remove('disabled');
+                    throw error;
                 }
-            })
-            .catch(error => {
-                resetAfterSubmitSuccess = false;
-                isFormDirty = true;
-                saveFormState();
+            };
+
+            const result = await saveOnlineOrQueue();
+            if (activeSubmissionToken !== submissionToken) return;
+
+            resetAfterSubmitSuccess = true;
+            saveLastPoint(reportData);
+            if (result.queued) {
+                updateOfflineStatus();
                 if (addAnother) {
-                    showToast(`فشل حفظ التقرير: ${error.message}`, true);
+                    showToast('تم حفظ التقرير محلياً وسيتم إرساله تلقائياً عند عودة الإنترنت.');
                 } else {
-                    successModal.hide();
-                    alert(`فشل إرسال التقرير: ${error.message}`);
+                    document.querySelector('#successModal .fs-5').textContent = 'تم حفظ التقرير محلياً — بانتظار الإنترنت للمزامنة';
+                    document.getElementById('success-spinner').style.display = 'none';
+                    viewReportBtn.classList.add('disabled');
+                    successModal.show();
                 }
-            });
+                return;
+            }
+
+            spawnConfetti();
+
+            if (addAnother) {
+                showToast('تم حفظ التقرير السابق بنجاح.');
+            } else {
+                if (!editId) {
+                    setSelectedPromoters([]);
+                    if (promotersSelectionTbody) {
+                        promotersSelectionTbody.querySelectorAll('.promoter-checkbox').forEach(cb => {
+                            cb.checked = false;
+                        });
+                    }
+                }
+                document.querySelector('#successModal .fs-5').textContent = 'تم حفظ التقرير بنجاح!';
+                document.getElementById('success-spinner').style.display = 'none';
+                viewReportBtn.href = '#/history';
+                sessionStorage.setItem('spaScrollReportId', String(result.reportId));
+                viewReportBtn.classList.remove('disabled');
+            }
+        } catch (error) {
+            if (activeSubmissionToken !== submissionToken) return;
+            resetAfterSubmitSuccess = false;
+            isFormDirty = true;
+            saveFormState();
+            if (addAnother) {
+                showToast(`فشل حفظ التقرير: ${error.message}`, true);
+            } else {
+                successModal.hide();
+                alert(`فشل إرسال التقرير: ${error.message}`);
+            }
+        } finally {
+            if (activeSubmissionToken === submissionToken) {
+                isSubmittingReport = false;
+                setSubmitButtonsBusy(false);
+            }
+        }
     };
     
     const updateSalesVisibility = () => {
