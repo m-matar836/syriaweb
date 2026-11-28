@@ -1,0 +1,19 @@
+{
+  "name": "lebanonweb-optimized-v2",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Google Apps Script + Sheets PWA for sales reports, attendance and salary advances. Unit tests run on plain Node with no dependencies.",
+  "scripts": {
+    "test": "node --test \"tests/*.test.js\"",
+    "test:auth": "node --test tests/auth.test.js",
+    "test:salary": "node --test tests/salary.test.js",
+    "test:attendance": "node --test tests/attendance.test.js",
+    "test:reports": "node --test tests/reports.test.js",
+    "test:client": "node --test tests/client-core.test.js tests/client-salary.test.js tests/client-history.test.js tests/client-entry-feed.test.js",
+    "test:cache": "node --test tests/cache-scoping.test.js",
+    "test:watch": "node --test --watch \"tests/*.test.js\""
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
